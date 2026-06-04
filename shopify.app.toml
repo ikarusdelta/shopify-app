@@ -1,7 +1,7 @@
 # Learn more about configuring your app at https://shopify.dev/docs/apps/tools/cli/configuration
 
 client_id = "839264da753b37e8d09c37ccb93a569d"
-application_url = "https://example.com"
+application_url = "https://shopify-clafvbsdb-ikarus-deltas-projects.vercel.app"
 embedded = true
 name = "ikarusdelta"
 
@@ -54,7 +54,10 @@ api_version = "2026-07"
   topics = [ "app/scopes_update" ]
 
 [auth]
-redirect_urls = [ "https://example.com/api/auth" ]
-
+redirect_urls = [
+  "https://ikarus-delta.vercel.app/auth/callback",
+  "https://ikarus-delta.vercel.app/auth/shopify/callback",
+  "https://ikarus-delta.vercel.app/api/auth/callback"
+]
 [build]
 automatically_update_urls_on_dev = true
