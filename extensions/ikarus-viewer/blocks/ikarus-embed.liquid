@@ -1,0 +1,46 @@
+<script>
+  window.addEventListener('message', function(event) {
+    if (!event.data || event.data.type !== 'IKARUS_SHOPIFY_ADD_TO_CART') return;
+    console.log('[Ikarus App Embed] ✅ Got message:', event.data);
+
+    fetch('/cart/add.js', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'Accept': 'application/json' },
+      body: JSON.stringify({
+        id: Number(event.data.variantId),
+        quantity: event.data.quantity || 1,
+        properties: event.data.properties || {}
+      })
+    })
+    .then(function(r) { return r.json(); })
+    .then(function(item) {
+      console.log('[Ikarus] ✅ Added to cart:', item);
+      const iframe = document.querySelector('iframe[id^="ikd-iframe-"]');
+      if (iframe && iframe.contentWindow) {
+        iframe.contentWindow.postMessage({ type: 'IKARUS_CART_SUCCESS', item: item }, '*');
+      }
+      const cartDrawer = document.querySelector('cart-drawer');
+      if (cartDrawer && typeof cartDrawer.open === 'function') {
+        cartDrawer.open();
+      } else {
+        document.dispatchEvent(new CustomEvent('cart:refresh', { bubbles: true }));
+        document.dispatchEvent(new CustomEvent('cart:open', { bubbles: true }));
+      }
+      fetch('/cart.js').then(function(r) { return r.json(); }).then(function(cart) {
+        document.querySelectorAll(
+          '.cart-count-bubble span, .cart__count, [data-cart-count], .cart-icon-bubble span'
+        ).forEach(function(el) { el.textContent = cart.item_count; });
+      });
+    })
+    .catch(function(err) {
+      console.error('[Ikarus] Cart error:', err);
+    });
+  });
+</script>
+
+{% schema %}
+{
+  "name": "Ikarus Cart Listener",
+  "target": "body"
+}
+{% endschema %}

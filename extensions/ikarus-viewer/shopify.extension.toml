@@ -1,0 +1,7 @@
+api_version = "2025-01"
+uid = "7fc0af61-19ff-32bb-b709-1a38ab4c4f0e5973582c"
+
+[[extensions]]
+type = "theme"
+name = "IkarusDelta 3D Viewer"
+handle = "ikarus-viewer"
