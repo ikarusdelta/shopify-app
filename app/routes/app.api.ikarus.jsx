@@ -24,6 +24,10 @@ export const action = async ({ request }) => {
     });
     const accessToken = settings?.accessToken || "";
     const lambdaUrl = (process.env.LAMBDA_URL || DEFAULT_LAMBDA_URL).replace(/\/$/, "");
+    
+    if (process.env.NODE_ENV === "development") {
+      console.log(`[API] Using Lambda URL: ${lambdaUrl}`);
+    }
 
     if (intent === "ping") {
       return Response.json({ ok: true });

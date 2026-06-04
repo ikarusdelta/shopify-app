@@ -120,6 +120,10 @@ export const action = async ({ request }) => {
     const accessToken = settings?.accessToken || "";
     const lambdaUrl = (process.env.LAMBDA_URL || DEFAULT_LAMBDA_URL).replace(/\/$/, "");
 
+    if (process.env.NODE_ENV === "development") {
+      console.log(`[Products] Using Lambda URL: ${lambdaUrl}`);
+    }
+
     // --- Intent: LOAD MENUS ---
     if (intent === "load_menus") {
       const projectId = formData.get("projectId")?.toString().trim();
