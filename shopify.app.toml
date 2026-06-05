@@ -3,7 +3,7 @@
 client_id = "839264da753b37e8d09c37ccb93a569d"
 application_url = "https://shopify-app-beta-two.vercel.app"
 embedded = true
-name = "ikarusdelta"
+name = "IkarusDeltaConnects"
 
 [access_scopes]
 # Learn more at https://shopify.dev/docs/apps/tools/cli/configuration#access_scopes
