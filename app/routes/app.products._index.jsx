@@ -7,7 +7,6 @@ import prisma from "../db.server";
 const DEFAULT_LAMBDA_URL = "http://localhost:3000/dev";
 
 export const loader = async ({ request }) => {
-  console.log("DEBUG: Loading app.products._index.jsx");
   const { admin, session } = await authenticate.admin(request);
   const url = new URL(request.url);
   const productId = url.searchParams.get("productId");
@@ -87,6 +86,7 @@ export const loader = async ({ request }) => {
 
   return {
     type: "detail",
+    shop: session.shop,
     product,
     productId,
     productOptions,
@@ -101,7 +101,7 @@ export const action = async ({ request }) => {
   // Detect if this is a fetcher request (AJAX) vs full-page form navigation.
   // Fetcher requests CANNOT handle thrown Response redirects — they cause
   // "Handling response" in App Bridge. We must return JSON errors instead.
-  const isFetcherRequest = request.headers.get("Accept")?.includes("text/html") === false
+  const isFetcherRequest = request.headers.get("Accept")?.includes("application/json") === true
     || request.headers.get("X-Remix-Prevent-Reloads") != null
     || request.headers.get("X-React-Router") != null;
 
@@ -119,10 +119,6 @@ export const action = async ({ request }) => {
     });
     const accessToken = settings?.accessToken || "";
     const lambdaUrl = (process.env.LAMBDA_URL || DEFAULT_LAMBDA_URL).replace(/\/$/, "");
-
-    if (process.env.NODE_ENV === "development") {
-      console.log(`[Products] Using Lambda URL: ${lambdaUrl}`);
-    }
 
     // --- Intent: LOAD MENUS ---
     if (intent === "load_menus") {
@@ -163,6 +159,9 @@ export const action = async ({ request }) => {
 
       const basePriceRaw = formData.get("basePrice")?.toString() || "0";
       const basePrice = parseFloat(basePriceRaw) || 0;
+      
+      // Fixed: Extract useAsAttributes state from formData
+      const useAsAttributes = formData.get("useAsAttributes") === "true";
 
       try {
         console.log(`[Ikarus Sync] Starting bulk price sync for base price: $${basePrice}`);
@@ -257,8 +256,6 @@ export const action = async ({ request }) => {
         console.log(`[Ikarus Sync] Successfully updated ${updatedVariants.length} variants.`);
 
         // 4. --- Build variantMapping section for master.json configuration ---
-        // Key format: "menuName:optionLabel" tokens sorted and joined by ','
-        // This matches what the viewer reconstructs at lookup time using materialSelections.
         const variantMapping = {};
 
         for (const variant of variants) {
@@ -298,6 +295,9 @@ export const action = async ({ request }) => {
         // Pushes calculated variant mappings directly to Lambda endpoint
         if (projectId && accessToken && Object.keys(variantMapping).length > 0) {
           try {
+            // Fixed: Dynamically generate menuSlots from mapping configurations
+            const menuSlots = Array.from(new Set(attrMapping.map(row => row.viewerMenu).filter(Boolean)));
+
             const response = await fetch(`${lambdaUrl}/viewer/${projectId}/options`, {
               method: "PATCH",
               headers: {
@@ -306,11 +306,14 @@ export const action = async ({ request }) => {
               },
               body: JSON.stringify({
                 shopify: {
-                  productId: productId,
                   basePrice: basePrice,
-                  varientMapping: variantMapping
+                  products: [{
+                    productId: productId,
+                    menuSlots: menuSlots,
+                    varientMapping: variantMapping
+                  }]
                 },
-                "use as attributes of product": formData.get("useAsAttributes") === "true"
+                "use as attributes of product": useAsAttributes
               }),
             });
 
@@ -395,7 +398,6 @@ export const action = async ({ request }) => {
               menuPrices,
               mapping,
               shopify: {
-                productId,
                 basePrice,
               },
               "use as attributes of product": formData.get("useAsAttributes") === "true"
@@ -500,13 +502,15 @@ function ProductListView({ products }) {
                       <s-text>{product.title}</s-text>
                       {price && <s-text tone="subdued">From ${price}</s-text>}
                     </s-stack>
-                    <s-button onClick={() => {
-                      setSearchParams((prev) => {
-                        const next = new URLSearchParams(prev);
-                        next.set('productId', numericId);
-                        return next;
-                      });
-                    }}>Configure</s-button>
+                    <div style={{margin:"0 20px"}}>
+                      <s-button onClick={() => {
+                        setSearchParams((prev) => {
+                          const next = new URLSearchParams(prev);
+                          next.set('productId', numericId);
+                          return next;
+                        });
+                      }}>Configure</s-button>
+                    </div>
                   </s-stack>
                 </s-box>
               );
@@ -528,19 +532,76 @@ function ProductConfigPage() {
   const { product, projectId: savedProjectId, attrMapping: savedMapping, productOptions } = useLoaderData();
   const actionData = useActionData();
   const navigation = useNavigation();
-  const fetcher = useFetcher();
-  const variationFetcher = useFetcher();
-  const saveFetcher = useFetcher();
-
-  const isSaving = saveFetcher.state !== "idle";
-  const isLoadingMenus = fetcher.state !== "idle";
-  const isCreatingVars = variationFetcher.state !== "idle";
+  const [isLoadingMenus, setIsLoadingMenus] = useState(false);
+  const [isCreatingVars, setIsCreatingVars] = useState(false);
+  const [isSaving, setIsSaving] = useState(false);
+  const [variationSuccessMsg, setVariationSuccessMsg] = useState("");
 
   // Toast notification state
   const [toast, setToast] = useState(null); // { message, type: 'success' | 'error' }
 
+  const doManualFetch = async (payload, setLoading, onSuccess, successMsg, isRetry = false) => {
+    setLoading(true);
+    if (!isRetry) {
+      setToast(null);
+      setVariationSuccessMsg("");
+    }
+    try {
+      const token = await window.shopify.idToken();
+      const formData = new FormData();
+      Object.keys(payload).forEach(k => formData.append(k, payload[k]));
+
+      const url = new URL("/app/api/ikarus", window.location.origin);
+      
+      // Forward all existing params (shop, host, embedded, productId, etc.)
+      const currentParams = new URLSearchParams(window.location.search);
+      currentParams.forEach((value, key) => {
+        url.searchParams.set(key, value);
+      });
+
+      const res = await fetch(url.toString(), {
+        method: "POST",
+        headers: {
+          "Authorization": `Bearer ${token}`,
+          "Accept": "application/json",
+        },
+        body: formData
+      });
+
+      console.log("Status:", res.status, "| URL:", res.url);
+      const contentType = res.headers.get("content-type") || "";
+
+      if (!contentType.includes("application/json")) {
+        const text = await res.text();
+        console.error("Non-JSON body:", text.slice(0, 800));
+        setToast({ message: `❌ Server error (${res.status}). Check console.`, type: "error" });
+        return;
+      }
+
+      const data = await res.json();
+
+      // Retry once after a short delay to let session commit to DB
+      if (data.error === "SESSION_ESTABLISHING" && !isRetry) {
+        console.log("[IKD] Session establishing, retrying in 1s...");
+        await new Promise(resolve => setTimeout(resolve, 1000));
+        return doManualFetch(payload, setLoading, onSuccess, successMsg, true);
+      }
+
+      if (data.error || data.saveError || data.variationError) {
+        setToast({ message: `❌ ${data.error || data.saveError || data.variationError}`, type: "error" });
+      } else {
+        if (successMsg) setToast({ message: successMsg, type: "success" });
+        if (onSuccess) onSuccess(data);
+      }
+    } catch (err) {
+      setToast({ message: `❌ Network error: ${err.message}`, type: "error" });
+    } finally {
+      setLoading(false);
+    }
+  };
+
   // Preserve query/search parameters
-  const [searchParams, setSearchParams] = useSearchParams();
+  const [searchParams] = useSearchParams();
   const searchStr = searchParams.toString();
   const queryString = searchStr ? `?${searchStr}` : "";
 
@@ -554,28 +615,57 @@ function ProductConfigPage() {
   const [basePrice, setBasePrice] = useState(initialBasePrice);
   const [useAsAttributes, setUseAsAttributes] = useState(false);
 
+  // Warm up the session as soon as the page loads
+  // so the first real action never hits the exchange flow
+  useEffect(() => {
+    const warmUpSession = async () => {
+      try {
+        const token = await window.shopify.idToken();
+        const currentParams = new URLSearchParams(window.location.search);
+        const url = new URL("/app/api/ikarus", window.location.origin);
+        currentParams.forEach((value, key) => url.searchParams.set(key, value));
+        url.searchParams.set("ping", "1"); // signal this is just a warm-up
+
+        await fetch(url.toString(), {
+          method: "POST",
+          headers: {
+            "Authorization": `Bearer ${token}`,
+            "Accept": "application/json",
+          },
+          body: (() => { const f = new FormData(); f.append("intent", "ping"); return f; })()
+        });
+      } catch (e) {
+        // Silently ignore — this is just a warm-up
+      }
+    };
+    warmUpSession();
+  }, []);
+
   // Safely compute if a mapping exists
   const hasMapping = Array.isArray(mapRows) && mapRows.some((r) => r?.viewerMenu && r.viewerMenu.trim() !== "");
 
+  const processMenuOptions = (data) => {
+    if (data?.menuOptions) {
+      setViewerMenus(data.menuOptions);
+      setMapRows((currentRows) => {
+        const safeRows = Array.isArray(currentRows) ? currentRows : [];
+        const existingMap = {};
+        safeRows.forEach((r) => { if (r?.shopifyOption) existingMap[r.shopifyOption] = r; });
+        const safeOptions = Array.isArray(productOptions) ? productOptions : [];
+        return safeOptions.map((opt) => {
+          if (opt?.name && existingMap[opt.name]) return existingMap[opt.name];
+          return { shopifyOption: opt?.name || "", viewerMenu: "", items: [] };
+        });
+      });
+    }
+  };
+
   // --- Auto-load menus on initial page load if projectId is already saved ---
   useEffect(() => {
-    if (savedProjectId && !viewerMenus && fetcher.state === "idle" && !fetcher.data) {
-      fetcher.submit({ intent: "load_menus", projectId: savedProjectId }, { method: "post" });
+    if (savedProjectId && !viewerMenus && !isLoadingMenus) {
+      doManualFetch({ intent: "load_menus", projectId: savedProjectId }, setIsLoadingMenus, processMenuOptions);
     }
-  }, [savedProjectId, viewerMenus, fetcher]);
-
-  // Show toast when saveFetcher completes
-  useEffect(() => {
-    if (saveFetcher.state === "idle" && saveFetcher.data) {
-      if (saveFetcher.data.success) {
-        setToast({ message: "✅ Configuration saved successfully!", type: "success" });
-      } else if (saveFetcher.data.saveError) {
-        setToast({ message: `❌ ${saveFetcher.data.saveError}`, type: "error" });
-      } else if (saveFetcher.data.error) {
-        setToast({ message: `❌ ${saveFetcher.data.error}`, type: "error" });
-      }
-    }
-  }, [saveFetcher.state, saveFetcher.data]);
+  }, [savedProjectId]); // Only run once on mount if savedProjectId exists
 
   // Auto-dismiss toast after 4 seconds
   useEffect(() => {
@@ -584,32 +674,9 @@ function ProductConfigPage() {
     return () => clearTimeout(t);
   }, [toast]);
 
-  // Load menuOptions into local state when fetcher completes
-  useEffect(() => {
-    if (fetcher.data?.menuOptions) {
-      const menus = fetcher.data.menuOptions;
-      setViewerMenus(menus);
-
-      setMapRows((currentRows) => {
-        const safeRows = Array.isArray(currentRows) ? currentRows : [];
-        const existingMap = {};
-
-        safeRows.forEach((r) => {
-          if (r?.shopifyOption) existingMap[r.shopifyOption] = r;
-        });
-
-        const safeOptions = Array.isArray(productOptions) ? productOptions : [];
-        return safeOptions.map((opt) => {
-          if (opt?.name && existingMap[opt.name]) return existingMap[opt.name];
-          return { shopifyOption: opt?.name || "", viewerMenu: "", items: [] };
-        });
-      });
-    }
-  }, [fetcher.data, productOptions]);
-
   const handleLoadMenus = () => {
     if (!projectId) return;
-    fetcher.submit({ intent: "load_menus", projectId }, { method: "post", action: queryString });
+    doManualFetch({ intent: "load_menus", projectId }, setIsLoadingMenus, processMenuOptions, "✅ Viewer menus loaded successfully!");
   };
 
   const strSimilarity = (a, b) => {
@@ -795,8 +862,7 @@ function ProductConfigPage() {
         });
       }}>← Back to Products</s-button>
 
-      {/* Load menus error banner */}
-      {fetcher.data?.error && <s-banner tone="critical" title={fetcher.data.error} />}
+
 
       {/* Floating toast notification for save/sync results */}
       {toast && (
@@ -917,95 +983,41 @@ function ProductConfigPage() {
                 </s-button>
               </div>
 
-              {/* STEP 2: AUTO MAP */}
-              <div style={{
-                padding: "16px",
-                border: "1px solid #e1e3e5",
-                borderRadius: "8px",
-                background: "#fff",
-                opacity: (hasMapping || !viewerMenus) ? 0.5 : 1,
-                transition: "opacity 0.3s ease"
-              }}>
-                <h3 style={{ margin: "0 0 8px 0", fontSize: "16px", display: "flex", alignItems: "center", gap: "8px" }}>
-                  <span style={{ background: (hasMapping || !viewerMenus) ? "#8c9196" : "#2c6ecb", color: "#fff", borderRadius: "50%", width: "24px", height: "24px", display: "inline-flex", alignItems: "center", justifyContent: "center", fontSize: "14px" }}>2</span>
-                  Auto Map Attributes
-                </h3>
-                <p style={{ margin: "0 0 12px 0", color: "#6d7175", fontSize: "14px" }}>
-                  Automatically match loaded menus to attributes. <strong>Please review the mappings before proceeding.</strong>
-                </p>
-                <s-button onClick={autoMap} disabled={hasMapping || !viewerMenus}>
-                  Auto Map
-                </s-button>
-                <p style={{ margin: "10px 0 12px 0", color: "red", fontSize: "14px" }}>please save your changes before proceeding.</p>
-              </div>
-
-              {/* STEP 3: SYNC */}
-              <div style={{
-                padding: "16px",
-                border: "1px solid #e1e3e5",
-                borderRadius: "8px",
-                background: "#fff",
-                opacity: !hasMapping ? 0.5 : 1,
-                transition: "opacity 0.3s ease"
-              }}>
-                <h3 style={{ margin: "0 0 8px 0", fontSize: "16px", display: "flex", alignItems: "center", gap: "8px" }}>
-                  <span style={{ background: !hasMapping ? "#8c9196" : "#2c6ecb", color: "#fff", borderRadius: "50%", width: "24px", height: "24px", display: "inline-flex", alignItems: "center", justifyContent: "center", fontSize: "14px" }}>3</span>
-                  Sync Variant Prices
-                </h3>
-                <p style={{ margin: "0 0 12px 0", color: "#6d7175", fontSize: "14px" }}>
-                  Save and sync the new prices based on your attribute map.
-                </p>
-
-                <variationFetcher.Form method="post" action={queryString}>
-                  <input type="hidden" name="intent" value="create_variations" />
-                  <input type="hidden" name="attrMapping" value={JSON.stringify(mapRows)} />
-                  <input type="hidden" name="basePrice" value={basePrice} />
-                  <input type="hidden" name="projectId" value={projectId} />
-                  <input type="hidden" name="useAsAttributes" value={useAsAttributes} />
-
-                  <button
-                    type="submit"
-                    disabled={!hasMapping || isCreatingVars}
-                    style={{
-                      padding: "8px 14px",
-                      borderRadius: "8px",
-                      border: "1px solid #c9cccf",
-                      background: !hasMapping ? "#f4f6f8" : "#fff",
-                      cursor: (!hasMapping || isCreatingVars) ? "not-allowed" : "pointer",
-                      fontWeight: 600,
-                      color: !hasMapping ? "#8c9196" : "#202223",
-                      transition: "all 0.2s ease"
-                    }}
-                  >
-                    {isCreatingVars ? "Syncing..." : "Sync Variant Prices"}
-                  </button>
-                </variationFetcher.Form>
-
-                {/* Success / Error Messages */}
-                <div style={{ marginTop: "16px", display: "flex", flexDirection: "column", gap: "8px" }}>
-                  {variationFetcher.data?.variationSuccess && (
-                    <s-banner
-                      tone="success"
-                      title={`✅ Done! Prices synced for ${variationFetcher.data.updatedCount} variants based on your attribute map.`}
-                    />
-                  )}
-
-                  {variationFetcher.data?.variationError && (
-                    <s-banner tone="critical" title={variationFetcher.data.variationError} />
-                  )}
-                </div>
-              </div>
+              {/* Steps 2 and 3 moved below */}
 
             </div>
           </s-stack>
         </s-section>
 
-        <s-section heading="Attribute Mapper">
-          <s-paragraph>
-            Map your Shopify product options to Ikarus viewer menus and set add-on prices, or link this product to a specific viewer option.
-          </s-paragraph>
+        {/* STEP 2: ATTRIBUTE MAPPER */}
+        <div style={{
+          opacity: !viewerMenus ? 0.5 : 1,
+          pointerEvents: !viewerMenus ? "none" : "auto",
+          transition: "opacity 0.3s ease"
+        }}>
+          <s-section heading="">
+            <div style={{
+              padding: "20px",
+              border: "1px solid #e1e3e5",
+              borderRadius: "8px",
+              background: "#fff"
+            }}>
+              <h3 style={{ margin: "0 0 12px 0", fontSize: "18px", display: "flex", alignItems: "center", gap: "10px" }}>
+                <span style={{ background: !viewerMenus ? "#8c9196" : "#2c6ecb", color: "#fff", borderRadius: "50%", width: "26px", height: "26px", display: "inline-flex", alignItems: "center", justifyContent: "center", fontSize: "14px" }}>2</span>
+                Attribute Mapper
+              </h3>
+              <p style={{ margin: "0 0 20px 0", color: "#6d7175", fontSize: "14px" }}>
+                Automatically match loaded menus to attributes, or map them manually. Set add-on prices, or link this product to a specific viewer option.
+              </p>
 
-          <s-stack direction="block" gap="loose">
+              <div style={{ display: "flex", gap: "16px", alignItems: "center", marginBottom: "24px", padding: "16px", background: "#f9fafb", borderRadius: "8px", border: "1px solid #e1e3e5" }}>
+                <s-button onClick={autoMap} disabled={hasMapping || !viewerMenus}>
+                  Auto Map Attributes
+                </s-button>
+                <span style={{ color: "#d72c0d", fontSize: "13px", fontWeight: "500" }}>* Please review and save your changes before proceeding to Step 3.</span>
+              </div>
+
+              <s-stack direction="block" gap="loose">
             {(mapRows || []).map((row, rowIndex) => (
               <s-card key={rowIndex}>
                 <s-stack direction="block" gap="base">
@@ -1152,34 +1164,100 @@ function ProductConfigPage() {
               </s-card>
             ))}
           </s-stack>
-        </s-section>
 
-        <saveFetcher.Form method="post" action={queryString} id="save-config-form">
-          <input type="hidden" name="intent" value="save_config" />
-          <input type="hidden" name="projectId" value={projectId} />
-          <input type="hidden" name="attrMapping" value={JSON.stringify(mapRows)} />
-          <input type="hidden" name="basePrice" value={basePrice} />
-          <input type="hidden" name="useAsAttributes" value={useAsAttributes} />
+              <div style={{ marginTop: "24px", paddingTop: "20px", borderTop: "1px solid #e1e3e5" }}>
+                <form onSubmit={(e) => {
+                  e.preventDefault();
+                  doManualFetch({
+                    intent: "save_config",
+                    projectId,
+                    attrMapping: JSON.stringify(mapRows),
+                    basePrice,
+                    useAsAttributes
+                  }, setIsSaving, null, "✅ Configuration saved successfully!");
+                }} id="save-config-form">
+                  <s-stack direction="inline">
+                    <button
+                      type="submit"
+                      disabled={isSaving}
+                      style={{
+                        background: isSaving ? "#a4e8d1" : "#008060",
+                        color: "#fff",
+                        border: "none",
+                        padding: "10px 16px",
+                        borderRadius: "8px",
+                        cursor: isSaving ? "not-allowed" : "pointer",
+                        fontWeight: 600,
+                        transition: "background 0.2s ease",
+                      }}
+                    >
+                      {isSaving ? "Saving..." : "Save All Changes"}
+                    </button>
+                  </s-stack>
+                </form>
+              </div>
+            </div>
+          </s-section>
+        </div>
 
-          <s-stack direction="inline">
-            <button
-              type="submit"
-              disabled={isSaving}
-              style={{
-                background: isSaving ? "#a4e8d1" : "#008060",
-                color: "#fff",
-                border: "none",
-                padding: "10px 16px",
-                borderRadius: "8px",
-                cursor: isSaving ? "not-allowed" : "pointer",
-                fontWeight: 600,
-                transition: "background 0.2s ease",
-              }}
-            >
-              {isSaving ? "Saving..." : "Save All Changes"}
-            </button>
-          </s-stack>
-        </saveFetcher.Form>
+        {/* STEP 3: SYNC */}
+        <div style={{
+          opacity: !hasMapping ? 0.5 : 1,
+          pointerEvents: !hasMapping ? "none" : "auto",
+          transition: "opacity 0.3s ease"
+        }}>
+          <s-section heading="">
+            <div style={{
+              padding: "20px",
+              border: "1px solid #e1e3e5",
+              borderRadius: "8px",
+              background: "#fff"
+            }}>
+              <h3 style={{ margin: "0 0 12px 0", fontSize: "18px", display: "flex", alignItems: "center", gap: "10px" }}>
+                <span style={{ background: !hasMapping ? "#8c9196" : "#2c6ecb", color: "#fff", borderRadius: "50%", width: "26px", height: "26px", display: "inline-flex", alignItems: "center", justifyContent: "center", fontSize: "14px" }}>3</span>
+                Sync Variant Prices
+              </h3>
+              <p style={{ margin: "0 0 16px 0", color: "#6d7175", fontSize: "14px" }}>
+                Save and sync the new prices based on your attribute map.
+              </p>
+
+              <form onSubmit={(e) => {
+                e.preventDefault();
+                doManualFetch({
+                  intent: "create_variations",
+                  attrMapping: JSON.stringify(mapRows),
+                  basePrice,
+                  projectId,
+                  useAsAttributes
+                }, setIsCreatingVars, (data) => setVariationSuccessMsg(`✅ Done! Prices synced for ${data.updatedCount} variants based on your attribute map.`));
+              }}>
+                <button
+                  type="submit"
+                  disabled={!hasMapping || isCreatingVars}
+                  style={{
+                    padding: "10px 16px",
+                    borderRadius: "8px",
+                    border: "1px solid #c9cccf",
+                    background: !hasMapping ? "#f4f6f8" : "#fff",
+                    cursor: (!hasMapping || isCreatingVars) ? "not-allowed" : "pointer",
+                    fontWeight: 600,
+                    color: !hasMapping ? "#8c9196" : "#202223",
+                    transition: "all 0.2s ease"
+                  }}
+                >
+                  {isCreatingVars ? "Syncing..." : "Sync Variant Prices"}
+                </button>
+              </form>
+
+              {/* Success Message */}
+              {variationSuccessMsg && (
+                <div style={{ marginTop: "16px" }}>
+                  <s-banner tone="success" title={variationSuccessMsg} />
+                </div>
+              )}
+            </div>
+          </s-section>
+        </div>
       </s-stack>
     </s-page>
   );
