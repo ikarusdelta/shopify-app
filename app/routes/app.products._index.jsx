@@ -7,6 +7,7 @@ import prisma from "../db.server";
 const DEFAULT_LAMBDA_URL = "http://localhost:3000/dev";
 
 export const loader = async ({ request }) => {
+  console.log("DEBUG: Loading app.products._index.jsx");
   const { admin, session } = await authenticate.admin(request);
   const url = new URL(request.url);
   const productId = url.searchParams.get("productId");
