@@ -66,6 +66,7 @@ export const action = async ({ request }) => {
       let attrMapping = [];
       try { attrMapping = JSON.parse(attrMappingRaw); } catch (e) {}
       const basePrice = parseFloat(formData.get("basePrice")?.toString() || "0") || 0;
+      const useAsAttributes = formData.get("useAsAttributes") === "true";
 
       try {
         const existingRes = await admin.graphql(
@@ -149,7 +150,10 @@ export const action = async ({ request }) => {
             await fetch(`${lambdaUrl}/viewer/${projectId}/options`, {
               method: "PATCH",
               headers: { "Content-Type": "application/json", "x-access-token": accessToken },
-              body: JSON.stringify({ shopify: { productId, basePrice, varientMapping: variantMapping } }),
+              body: JSON.stringify({ 
+                shopify: { productId, basePrice, varientMapping: variantMapping },
+                "use as attributes of product": useAsAttributes
+              }),
             });
           } catch (err) {
             console.error("Variant mapping sync failed:", err);
@@ -175,6 +179,7 @@ export const action = async ({ request }) => {
         return Response.json({ saveError: "Failed to parse attribute mapping JSON." });
       }
       const basePrice = parseFloat(formData.get("basePrice")?.toString() || "0") || 0;
+      const useAsAttributes = formData.get("useAsAttributes") === "true";
 
       try {
         await prisma.productConfig.upsert({
@@ -203,7 +208,12 @@ export const action = async ({ request }) => {
             await fetch(`${lambdaUrl}/viewer/${projectId}/options`, {
               method: "PATCH",
               headers: { "Content-Type": "application/json", "x-access-token": accessToken },
-              body: JSON.stringify({ menuPrices, mapping, shopify: { productId, basePrice } }),
+              body: JSON.stringify({ 
+                menuPrices, 
+                mapping, 
+                shopify: { productId, basePrice },
+                "use as attributes of product": useAsAttributes
+              }),
             });
           } catch (err) {
             console.error("Lambda sync failed:", err);

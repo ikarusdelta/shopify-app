@@ -841,7 +841,15 @@ function ProductConfigPage() {
                 <label style={{ fontSize: "12px", fontWeight: "600", color: "#444" }}>
                   Base Product Price
                 </label>
-                <label style={{ display: "flex", alignItems: "center", gap: "6px", fontSize: "12px", cursor: "pointer", color: "#444" }}>
+                <label style={{ 
+                  display: "flex", 
+                  alignItems: "center", 
+                  gap: "6px", 
+                  fontSize: "12px", 
+                  cursor: "pointer", 
+                  color: "#B83D24",
+                  fontWeight: "600"
+                }}>
                   <input
                     type="checkbox"
                     checked={useAsAttributes}
