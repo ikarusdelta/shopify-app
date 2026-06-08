@@ -539,7 +539,7 @@ function ProductConfigPage() {
   const [toast, setToast] = useState(null); // { message, type: 'success' | 'error' }
 
   // Preserve query/search parameters
-  const [searchParams] = useSearchParams();
+  const [searchParams, setSearchParams] = useSearchParams();
   const searchStr = searchParams.toString();
   const queryString = searchStr ? `?${searchStr}` : "";
 
