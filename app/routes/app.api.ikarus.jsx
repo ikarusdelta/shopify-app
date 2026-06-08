@@ -255,10 +255,14 @@ export const action = async ({ request }) => {
         const updatedVariants = data.data?.productVariantsBulkUpdate?.productVariants || [];
         console.log(`[Ikarus Sync] Successfully updated ${updatedVariants.length} variants.`);
 
-        // 4. --- Build variantMapping section for master.json configuration ---
+        // 4. --- Build variantMapping for this product ---
         // Key format: "menuName:optionLabel" tokens sorted and joined by ','
         // This matches what the viewer reconstructs at lookup time using materialSelections.
         const variantMapping = {};
+
+        // Collect all viewer menu names used in this product's attrMapping
+        // These become the menuSlots — the viewer uses them to build lookup keys
+        const menuSlotsSet = new Set();
 
         for (const variant of variants) {
           const keyTokens = [];
@@ -267,6 +271,9 @@ export const action = async ({ request }) => {
           for (const option of variant.selectedOptions) {
             const matchedRow = attrMapping.find((row) => row.shopifyOption === option.name);
             if (matchedRow && matchedRow.viewerMenu && matchedRow.items) {
+              // Track this menu as a slot for this product
+              menuSlotsSet.add(matchedRow.viewerMenu);
+
               const matchedItem = matchedRow.items.find((item) => item.shopifyValue === option.value);
               if (matchedItem?.viewerOption?.label) {
                 // Token = "viewerMenuName:optionLabel" — stable and human-readable
@@ -278,6 +285,8 @@ export const action = async ({ request }) => {
           // Grab key token from virtual "Product Variants" configuration rows
           const variantRow = attrMapping.find((row) => row.shopifyOption === "Product Variants");
           if (variantRow && variantRow.viewerMenu && variantRow.items) {
+            menuSlotsSet.add(variantRow.viewerMenu);
+
             const matchedItem = variantRow.items.find((item) => item.shopifyValue === variant.title);
             if (matchedItem?.viewerOption?.label) {
               keyTokens.push(`${variantRow.viewerMenu}:${matchedItem.viewerOption.label}`);
@@ -292,11 +301,28 @@ export const action = async ({ request }) => {
           }
         }
 
+        const menuSlots = Array.from(menuSlotsSet);
         console.log(`[Ikarus Sync] Constructed Variant Mapping:`, variantMapping);
+        console.log(`[Ikarus Sync] Menu Slots for this product:`, menuSlots);
 
-        // Pushes calculated variant mappings directly to Lambda endpoint
+        // 5. Push to Lambda using new multi-product structure
+        // Each product self-registers under master.json -> shopify.products[]
+        // Lambda merges incrementally — P1 and P2 entries don't overwrite each other
         if (projectId && accessToken && Object.keys(variantMapping).length > 0) {
           try {
+            const shopifyPayload = {
+              // basePrice only meaningful on the "primary" product (the one with actual prices).
+              // On the secondary product (add-on only, base price = 0), this just sets 0 — harmless.
+              basePrice: basePrice,
+              products: [
+                {
+                  productId: productId,       // this product's Shopify numeric ID
+                  menuSlots: menuSlots,        // viewer menus this product covers
+                  varientMapping: variantMapping
+                }
+              ]
+            };
+
             const response = await fetch(`${lambdaUrl}/viewer/${projectId}/options`, {
               method: "PATCH",
               headers: {
@@ -304,11 +330,7 @@ export const action = async ({ request }) => {
                 "x-access-token": accessToken,
               },
               body: JSON.stringify({
-                shopify: {
-                  productId: productId,
-                  basePrice: basePrice,
-                  varientMapping: variantMapping
-                },
+                shopify: shopifyPayload,
                 "use as attributes of product": formData.get("useAsAttributes") === "true"
               }),
             });
@@ -316,7 +338,7 @@ export const action = async ({ request }) => {
             if (!response.ok) {
               console.error("Ikarus API Variant Mapping Sync returned error:", await response.text());
             } else {
-              console.log(`[Ikarus Sync] Successfully pushed varientMapping configuration to master.json`);
+              console.log(`[Ikarus Sync] Successfully pushed multi-product varientMapping to master.json`);
             }
           } catch (err) {
             console.error("Ikarus API Variant Mapping Sync network request failed:", err);
@@ -394,7 +416,11 @@ export const action = async ({ request }) => {
               menuPrices,
               mapping,
               shopify: {
-                productId,
+                // NOTE: productId intentionally omitted here.
+                // save_config only updates prices/menuPrices — it does NOT write
+                // variant mappings. Sending productId would trigger the legacy
+                // flat-mapping path in Lambda. Variant mapping is written only
+                // by the create_variations (Sync) intent using the new products[] structure.
                 basePrice,
               },
               "use as attributes of product": formData.get("useAsAttributes") === "true"
@@ -539,7 +565,7 @@ function ProductConfigPage() {
   const [toast, setToast] = useState(null); // { message, type: 'success' | 'error' }
 
   // Preserve query/search parameters
-  const [searchParams] = useSearchParams();
+  const [searchParams, setSearchParams] = useSearchParams();
   const searchStr = searchParams.toString();
   const queryString = searchStr ? `?${searchStr}` : "";
 
