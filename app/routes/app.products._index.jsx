@@ -308,7 +308,8 @@ export const action = async ({ request }) => {
                   productId: productId,
                   basePrice: basePrice,
                   varientMapping: variantMapping
-                }
+                },
+                "use as attributes of product": formData.get("useAsAttributes") === "true"
               }),
             });
 
@@ -396,6 +397,7 @@ export const action = async ({ request }) => {
                 productId,
                 basePrice,
               },
+              "use as attributes of product": formData.get("useAsAttributes") === "true"
             }),
           });
 
@@ -549,6 +551,7 @@ function ProductConfigPage() {
   // Safely extract initial base price
   const initialBasePrice = product?.variants?.nodes?.[0]?.price || "0";
   const [basePrice, setBasePrice] = useState(initialBasePrice);
+  const [useAsAttributes, setUseAsAttributes] = useState(false);
 
   // Safely compute if a mapping exists
   const hasMapping = Array.isArray(mapRows) && mapRows.some((r) => r?.viewerMenu && r.viewerMenu.trim() !== "");
@@ -834,18 +837,50 @@ function ProductConfigPage() {
             />
 
             <div style={{ marginBottom: "16px" }}>
-              <label style={{ display: "block", fontSize: "12px", marginBottom: "6px", fontWeight: "600", color: "#444" }}>
-                Base Product Price
-              </label>
-              <div style={{ display: "flex", alignItems: "center", background: "#fff", border: "1px solid #c9cccf", borderRadius: "8px", height: "38px", padding: "0 12px" }}>
-                <span style={{ fontSize: "14px", color: "#666", marginRight: "8px", fontWeight: "600" }}>$</span>
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "6px" }}>
+                <label style={{ fontSize: "12px", fontWeight: "600", color: "#444" }}>
+                  Base Product Price
+                </label>
+                <label style={{ display: "flex", alignItems: "center", gap: "6px", fontSize: "12px", cursor: "pointer", color: "#444" }}>
+                  <input
+                    type="checkbox"
+                    checked={useAsAttributes}
+                    onChange={(e) => {
+                      const checked = e.target.checked;
+                      setUseAsAttributes(checked);
+                      if (checked) setBasePrice("0");
+                    }}
+                  />
+                  Use Product as attribute
+                </label>
+              </div>
+              <div style={{
+                display: "flex",
+                alignItems: "center",
+                background: useAsAttributes ? "#f1f2f3" : "#fff",
+                border: "1px solid #c9cccf",
+                borderRadius: "8px",
+                height: "38px",
+                padding: "0 12px",
+                opacity: useAsAttributes ? 0.7 : 1
+              }}>
+                <span style={{ fontSize: "14px", color: useAsAttributes ? "#999" : "#666", marginRight: "8px", fontWeight: "600" }}>$</span>
                 <input
                   type="number"
                   step="0.01"
                   min="0"
                   value={basePrice}
+                  disabled={useAsAttributes}
                   onChange={(e) => setBasePrice(e.target.value)}
-                  style={{ width: "100%", border: "none", outline: "none", fontSize: "14px", padding: "0" }}
+                  style={{
+                    width: "100%",
+                    border: "none",
+                    outline: "none",
+                    fontSize: "14px",
+                    padding: "0",
+                    background: "transparent",
+                    color: useAsAttributes ? "#999" : "inherit"
+                  }}
                 />
               </div>
             </div>
@@ -917,6 +952,7 @@ function ProductConfigPage() {
                   <input type="hidden" name="attrMapping" value={JSON.stringify(mapRows)} />
                   <input type="hidden" name="basePrice" value={basePrice} />
                   <input type="hidden" name="projectId" value={projectId} />
+                  <input type="hidden" name="useAsAttributes" value={useAsAttributes} />
 
                   <button
                     type="submit"
@@ -1114,6 +1150,7 @@ function ProductConfigPage() {
           <input type="hidden" name="projectId" value={projectId} />
           <input type="hidden" name="attrMapping" value={JSON.stringify(mapRows)} />
           <input type="hidden" name="basePrice" value={basePrice} />
+          <input type="hidden" name="useAsAttributes" value={useAsAttributes} />
 
           <s-stack direction="inline">
             <button
