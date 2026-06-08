@@ -1,6 +1,6 @@
 # Learn more about configuring your app at https://shopify.dev/docs/apps/tools/cli/configuration
 
-client_id = "839264da753b37e8d09c37ccb93a569d"
+client_id = "23803b9cf602b10403d562e244388160"
 application_url = "https://shopify-app-beta-two.vercel.app"
 embedded = true
 name = "IkarusDeltaConnects"
