@@ -8,11 +8,10 @@ export const action = async ({ request }) => {
   console.log("[API] Incoming request params:", Object.fromEntries(url.searchParams));
   console.log("[API] Auth header:", request.headers.get("Authorization")?.slice(0, 30));
 
-  // This route is dedicated to AJAX calls — always returns JSON
   try {
     const { admin, session } = await authenticate.admin(request);
     
-    const url = new URL(request.url);
+    // Safely extract productId from URL query params
     const productId = url.searchParams.get("productId");
     const productGid = `gid://shopify/Product/${productId}`;
     
@@ -33,7 +32,7 @@ export const action = async ({ request }) => {
       return Response.json({ ok: true });
     }
 
-    // --- LOAD MENUS ---
+    // --- Intent: LOAD MENUS ---
     if (intent === "load_menus") {
       const projectId = formData.get("projectId")?.toString().trim();
       if (!projectId) return Response.json({ error: "No Project ID provided" });
@@ -59,7 +58,7 @@ export const action = async ({ request }) => {
       }
     }
 
-    // --- SYNC VARIANT PRICES ---
+    // --- Intent: SYNC VARIANT PRICES & GENERATE NEW ARRAYS ---
     if (intent === "create_variations") {
       const projectId = formData.get("projectId")?.toString().trim();
       const attrMappingRaw = formData.get("attrMapping")?.toString() || "[]";
@@ -120,13 +119,16 @@ export const action = async ({ request }) => {
 
         const updatedVariants = data.data?.productVariantsBulkUpdate?.productVariants || [];
 
-        // Build variantMapping
+        // Build Multi-Product Token Maps
         const variantMapping = {};
+        const menuSlotsSet = new Set();
+
         for (const variant of variants) {
           const keyTokens = [];
           for (const option of variant.selectedOptions) {
             const matchedRow = attrMapping.find((row) => row.shopifyOption === option.name);
             if (matchedRow?.viewerMenu && matchedRow?.items) {
+              menuSlotsSet.add(matchedRow.viewerMenu);
               const matchedItem = matchedRow.items.find((item) => item.shopifyValue === option.value);
               if (matchedItem?.viewerOption?.label) {
                 keyTokens.push(`${matchedRow.viewerMenu}:${matchedItem.viewerOption.label}`);
@@ -135,6 +137,7 @@ export const action = async ({ request }) => {
           }
           const variantRow = attrMapping.find((row) => row.shopifyOption === "Product Variants");
           if (variantRow?.viewerMenu && variantRow?.items) {
+            menuSlotsSet.add(variantRow.viewerMenu);
             const matchedItem = variantRow.items.find((item) => item.shopifyValue === variant.title);
             if (matchedItem?.viewerOption?.label) {
               keyTokens.push(`${variantRow.viewerMenu}:${matchedItem.viewerOption.label}`);
@@ -145,13 +148,25 @@ export const action = async ({ request }) => {
           }
         }
 
+        const menuSlots = Array.from(menuSlotsSet);
+
+        // FIXED: Pack mapping configurations securely inside the 'products' array block
         if (projectId && accessToken && Object.keys(variantMapping).length > 0) {
           try {
             await fetch(`${lambdaUrl}/viewer/${projectId}/options`, {
               method: "PATCH",
               headers: { "Content-Type": "application/json", "x-access-token": accessToken },
               body: JSON.stringify({ 
-                shopify: { productId, basePrice, varientMapping: variantMapping },
+                shopify: { 
+                  basePrice: basePrice, 
+                  products: [
+                    {
+                      productId: productId,
+                      menuSlots: menuSlots,
+                      varientMapping: variantMapping
+                    }
+                  ]
+                },
                 "use as attributes of product": useAsAttributes
               }),
             });
@@ -170,7 +185,7 @@ export const action = async ({ request }) => {
       }
     }
 
-    // --- SAVE CONFIG ---
+    // --- Intent: SAVE CONFIG ---
     if (intent === "save_config") {
       const projectId = formData.get("projectId")?.toString().trim() || "";
       const attrMappingRaw = formData.get("attrMapping")?.toString() || "[]";
@@ -211,7 +226,10 @@ export const action = async ({ request }) => {
               body: JSON.stringify({ 
                 menuPrices, 
                 mapping, 
-                shopify: { productId, basePrice },
+                shopify: { 
+                  // FIXED: Omit explicit top-level productId to stay within standard pricing context
+                  basePrice 
+                },
                 "use as attributes of product": useAsAttributes
               }),
             });
@@ -251,9 +269,6 @@ export const action = async ({ request }) => {
 
   } catch (err) {
     console.log("[API] Auth error type:", err?.constructor?.name);
-    console.log("[API] Auth error status:", err?.status);
-    console.log("[API] Auth error headers:", err instanceof Response ? Object.fromEntries(err.headers) : "n/a");
-    console.log("[API] Auth error location:", err instanceof Response ? err.headers.get("location") : "n/a");
     
     if (err instanceof Response) {
       return Response.json({ error: "SESSION_ESTABLISHING" }, { status: 401 });
