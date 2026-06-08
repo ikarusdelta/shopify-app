@@ -416,7 +416,11 @@ export const action = async ({ request }) => {
               menuPrices,
               mapping,
               shopify: {
-                productId,
+                // NOTE: productId intentionally omitted here.
+                // save_config only updates prices/menuPrices — it does NOT write
+                // variant mappings. Sending productId would trigger the legacy
+                // flat-mapping path in Lambda. Variant mapping is written only
+                // by the create_variations (Sync) intent using the new products[] structure.
                 basePrice,
               },
               "use as attributes of product": formData.get("useAsAttributes") === "true"
