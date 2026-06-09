@@ -92,15 +92,14 @@ export const loader = async ({ request }) => {
     productOptions,
     projectId: config?.projectId || "",
     attrMapping: parsedMapping,
+    // Pass the saved checkbox state back to the UI (default to false if not yet saved)
+    useAsAttributes: config?.useAsAttributes === true,
     accessToken: settings?.accessToken || "",
     lambdaUrl: process.env.LAMBDA_URL || DEFAULT_LAMBDA_URL,
   };
 };
 
 export const action = async ({ request }) => {
-  // Detect if this is a fetcher request (AJAX) vs full-page form navigation.
-  // Fetcher requests CANNOT handle thrown Response redirects — they cause
-  // "Handling response" in App Bridge. We must return JSON errors instead.
   const isFetcherRequest = request.headers.get("Accept")?.includes("application/json") === true
     || request.headers.get("X-Remix-Prevent-Reloads") != null
     || request.headers.get("X-React-Router") != null;
@@ -127,7 +126,6 @@ export const action = async ({ request }) => {
       if (!accessToken) return { error: "No Access Token set in Settings" };
 
       try {
-        // 15 second timeout — prevents hanging if Lambda is cold-starting
         const controller = new AbortController();
         const timeoutId = setTimeout(() => controller.abort(), 15000);
 
@@ -159,14 +157,11 @@ export const action = async ({ request }) => {
 
       const basePriceRaw = formData.get("basePrice")?.toString() || "0";
       const basePrice = parseFloat(basePriceRaw) || 0;
-      
-      // Fixed: Extract useAsAttributes state from formData
       const useAsAttributes = formData.get("useAsAttributes") === "true";
 
       try {
         console.log(`[Ikarus Sync] Starting bulk price sync for base price: $${basePrice}`);
 
-        // 1. Fetch current variants directly from Shopify
         const existingRes = await admin.graphql(
           `query getVariants($id: ID!) {
           product(id: $id) {
@@ -193,11 +188,9 @@ export const action = async ({ request }) => {
           return { variationError: "No variants found for this product in Shopify." };
         }
 
-        // 2. Compute prices and build a bulk update payload
         const variantsToUpdate = variants.map((variant) => {
           let attributeAddonPrice = 0;
 
-          // A. Match standard attributes (like Color, Size)
           for (const option of variant.selectedOptions) {
             const matchedRow = attrMapping.find((row) => row.shopifyOption === option.name);
             if (matchedRow && matchedRow.items) {
@@ -208,16 +201,14 @@ export const action = async ({ request }) => {
             }
           }
 
-          // B. Match the virtual "Product Variants" row (matches by title)
           const variantRow = attrMapping.find((row) => row.shopifyOption === "Product Variants");
-          if (variantRow && variantRow.items) {
+          if (variantRow && variantRow.viewerMenu && variantRow.items) {
             const matchedItem = variantRow.items.find((item) => item.shopifyValue === variant.title);
             if (matchedItem) {
               attributeAddonPrice += parseFloat(matchedItem.price) || 0;
             }
           }
 
-          // Final calculated price
           const finalCalculatedPrice = (basePrice + attributeAddonPrice).toFixed(2);
 
           return {
@@ -228,7 +219,6 @@ export const action = async ({ request }) => {
 
         console.log(`[Ikarus Sync] Sending Bulk Update Payload to Shopify:`, JSON.stringify(variantsToUpdate, null, 2));
 
-        // 3. Fire the modern BULK update mutation (One API call instead of loops)
         const res = await admin.graphql(
           `mutation productVariantsBulkUpdate($productId: ID!, $variants: [ProductVariantsBulkInput!]!) {
           productVariantsBulkUpdate(productId: $productId, variants: $variants) {
@@ -255,25 +245,21 @@ export const action = async ({ request }) => {
         const updatedVariants = data.data?.productVariantsBulkUpdate?.productVariants || [];
         console.log(`[Ikarus Sync] Successfully updated ${updatedVariants.length} variants.`);
 
-        // 4. --- Build variantMapping section for master.json configuration ---
         const variantMapping = {};
 
         for (const variant of variants) {
           const keyTokens = [];
 
-          // Grab key tokens from standard configuration rows
           for (const option of variant.selectedOptions) {
             const matchedRow = attrMapping.find((row) => row.shopifyOption === option.name);
             if (matchedRow && matchedRow.viewerMenu && matchedRow.items) {
               const matchedItem = matchedRow.items.find((item) => item.shopifyValue === option.value);
               if (matchedItem?.viewerOption?.label) {
-                // Token = "viewerMenuName:optionLabel" — stable and human-readable
                 keyTokens.push(`${matchedRow.viewerMenu}:${matchedItem.viewerOption.label}`);
               }
             }
           }
 
-          // Grab key token from virtual "Product Variants" configuration rows
           const variantRow = attrMapping.find((row) => row.shopifyOption === "Product Variants");
           if (variantRow && variantRow.viewerMenu && variantRow.items) {
             const matchedItem = variantRow.items.find((item) => item.shopifyValue === variant.title);
@@ -282,20 +268,17 @@ export const action = async ({ request }) => {
             }
           }
 
-          // Sort tokens alphabetically to guarantee order-independent matching
           if (keyTokens.length > 0) {
             const mappingKey = keyTokens.sort().join(',');
-            const cleanVariantId = variant.id.split('/').pop(); // Extract numeric variant ID string
+            const cleanVariantId = variant.id.split('/').pop();
             variantMapping[mappingKey] = cleanVariantId;
           }
         }
 
         console.log(`[Ikarus Sync] Constructed Variant Mapping:`, variantMapping);
 
-        // Pushes calculated variant mappings directly to Lambda endpoint
         if (projectId && accessToken && Object.keys(variantMapping).length > 0) {
           try {
-            // Fixed: Dynamically generate menuSlots from mapping configurations
             const menuSlots = Array.from(new Set(attrMapping.map(row => row.viewerMenu).filter(Boolean)));
 
             const response = await fetch(`${lambdaUrl}/viewer/${projectId}/options`, {
@@ -351,15 +334,16 @@ export const action = async ({ request }) => {
 
     const basePriceRaw = formData.get("basePrice")?.toString() || "0";
     const basePrice = parseFloat(basePriceRaw) || 0;
+    const useAsAttributes = formData.get("useAsAttributes") === "true";
 
-    console.log(`[Ikarus Save] Saving config for product ${productId}, projectId: ${projectId}, mapping rows: ${attrMapping.length}`);
+    console.log(`[Ikarus Save] Saving config for product ${productId}, useAsAttributes: ${useAsAttributes}`);
 
     try {
-      // 1. Save to Local Database
+      // 1. Save to Local Database (Added useAsAttributes persistence tracking)
       await prisma.productConfig.upsert({
         where: { shop_productId: { shop: session.shop, productId } },
-        update: { projectId, attrMapping: attrMappingRaw },
-        create: { shop: session.shop, productId, projectId, attrMapping: attrMappingRaw },
+        update: { projectId, attrMapping: attrMappingRaw, useAsAttributes },
+        create: { shop: session.shop, productId, projectId, attrMapping: attrMappingRaw, useAsAttributes },
       });
 
       console.log(`[Ikarus Save] DB upsert successful.`);
@@ -400,7 +384,7 @@ export const action = async ({ request }) => {
               shopify: {
                 basePrice,
               },
-              "use as attributes of product": formData.get("useAsAttributes") === "true"
+              "use as attributes of product": useAsAttributes
             }),
           });
 
@@ -463,8 +447,6 @@ export const action = async ({ request }) => {
     }
 
   } catch (outerErr) {
-    // Re-throw Response redirects ONLY for full page navigations.
-    // Fetcher (AJAX) requests cannot handle redirects — return JSON instead.
     if (outerErr instanceof Response && !isFetcherRequest) throw outerErr;
     if (outerErr instanceof Response) {
       return { error: "Session expired. Please reload the page and try again.", saveError: "Session expired. Please reload the page and try again." };
@@ -529,7 +511,7 @@ export default function ProductsPage() {
 }
 
 function ProductConfigPage() {
-  const { product, projectId: savedProjectId, attrMapping: savedMapping, productOptions } = useLoaderData();
+  const { product, projectId: savedProjectId, attrMapping: savedMapping, productOptions, useAsAttributes: savedUseAsAttributes } = useLoaderData();
   const actionData = useActionData();
   const navigation = useNavigation();
   const [isLoadingMenus, setIsLoadingMenus] = useState(false);
@@ -537,8 +519,7 @@ function ProductConfigPage() {
   const [isSaving, setIsSaving] = useState(false);
   const [variationSuccessMsg, setVariationSuccessMsg] = useState("");
 
-  // Toast notification state
-  const [toast, setToast] = useState(null); // { message, type: 'success' | 'error' }
+  const [toast, setToast] = useState(null);
 
   const doManualFetch = async (payload, setLoading, onSuccess, successMsg, isRetry = false) => {
     setLoading(true);
@@ -553,7 +534,6 @@ function ProductConfigPage() {
 
       const url = new URL("/app/api/ikarus", window.location.origin);
       
-      // Forward all existing params (shop, host, embedded, productId, etc.)
       const currentParams = new URLSearchParams(window.location.search);
       currentParams.forEach((value, key) => {
         url.searchParams.set(key, value);
@@ -580,7 +560,6 @@ function ProductConfigPage() {
 
       const data = await res.json();
 
-      // Retry once after a short delay to let session commit to DB
       if (data.error === "SESSION_ESTABLISHING" && !isRetry) {
         console.log("[IKD] Session establishing, retrying in 1s...");
         await new Promise(resolve => setTimeout(resolve, 1000));
@@ -600,23 +579,20 @@ function ProductConfigPage() {
     }
   };
 
-  // Preserve query/search parameters
   const [searchParams] = useSearchParams();
   const searchStr = searchParams.toString();
   const queryString = searchStr ? `?${searchStr}` : "";
 
-  // State hooks - initialized safely
   const [projectId, setProjectId] = useState(savedProjectId || "");
   const [mapRows, setMapRows] = useState(Array.isArray(savedMapping) ? savedMapping : []);
   const [viewerMenus, setViewerMenus] = useState(null);
 
-  // Safely extract initial base price
   const initialBasePrice = product?.variants?.nodes?.[0]?.price || "0";
   const [basePrice, setBasePrice] = useState(initialBasePrice);
-  const [useAsAttributes, setUseAsAttributes] = useState(false);
+  
+  // Fixed: Initialize checkbox state from loader configuration record payload
+  const [useAsAttributes, setUseAsAttributes] = useState(savedUseAsAttributes || false);
 
-  // Warm up the session as soon as the page loads
-  // so the first real action never hits the exchange flow
   useEffect(() => {
     const warmUpSession = async () => {
       try {
@@ -624,7 +600,7 @@ function ProductConfigPage() {
         const currentParams = new URLSearchParams(window.location.search);
         const url = new URL("/app/api/ikarus", window.location.origin);
         currentParams.forEach((value, key) => url.searchParams.set(key, value));
-        url.searchParams.set("ping", "1"); // signal this is just a warm-up
+        url.searchParams.set("ping", "1");
 
         await fetch(url.toString(), {
           method: "POST",
@@ -634,14 +610,11 @@ function ProductConfigPage() {
           },
           body: (() => { const f = new FormData(); f.append("intent", "ping"); return f; })()
         });
-      } catch (e) {
-        // Silently ignore — this is just a warm-up
-      }
+      } catch (e) { }
     };
     warmUpSession();
   }, []);
 
-  // Safely compute if a mapping exists
   const hasMapping = Array.isArray(mapRows) && mapRows.some((r) => r?.viewerMenu && r.viewerMenu.trim() !== "");
 
   const processMenuOptions = (data) => {
@@ -660,14 +633,12 @@ function ProductConfigPage() {
     }
   };
 
-  // --- Auto-load menus on initial page load if projectId is already saved ---
   useEffect(() => {
     if (savedProjectId && !viewerMenus && !isLoadingMenus) {
       doManualFetch({ intent: "load_menus", projectId: savedProjectId }, setIsLoadingMenus, processMenuOptions);
     }
-  }, [savedProjectId]); // Only run once on mount if savedProjectId exists
+  }, [savedProjectId]);
 
-  // Auto-dismiss toast after 4 seconds
   useEffect(() => {
     if (!toast) return;
     const t = setTimeout(() => setToast(null), 4000);
@@ -862,9 +833,6 @@ function ProductConfigPage() {
         });
       }}>← Back to Products</s-button>
 
-
-
-      {/* Floating toast notification for save/sync results */}
       {toast && (
         <div style={{
           position: "fixed",
@@ -982,8 +950,6 @@ function ProductConfigPage() {
                   {isLoadingMenus ? "Loading..." : "Load Viewer Menus"}
                 </s-button>
               </div>
-
-              {/* Steps 2 and 3 moved below */}
 
             </div>
           </s-stack>
