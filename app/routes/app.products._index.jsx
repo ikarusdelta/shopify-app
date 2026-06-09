@@ -421,6 +421,13 @@ export const action = async ({ request }) => {
                 value: JSON.stringify(attrMapping),
                 type: "json",
               },
+              {
+                ownerId: productGid,
+                namespace: "ikarus_delta",
+                key: "use_as_attributes",
+                value: useAsAttributes ? "true" : "false",
+                type: "single_line_text_field",
+              },
             ],
           },
         },

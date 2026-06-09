@@ -199,8 +199,8 @@ export const action = async ({ request }) => {
       try {
         await prisma.productConfig.upsert({
           where: { shop_productId: { shop: session.shop, productId } },
-          update: { projectId, attrMapping: attrMappingRaw },
-          create: { shop: session.shop, productId, projectId, attrMapping: attrMappingRaw },
+          update: { projectId, attrMapping: attrMappingRaw, useAsAttributes },
+          create: { shop: session.shop, productId, projectId, attrMapping: attrMappingRaw, useAsAttributes },
         });
 
         if (projectId && accessToken) {
@@ -249,6 +249,7 @@ export const action = async ({ request }) => {
               metafields: [
                 { ownerId: productGid, namespace: "ikarus_delta", key: "project_id", value: projectId, type: "single_line_text_field" },
                 { ownerId: productGid, namespace: "ikarus_delta", key: "mapping", value: JSON.stringify(attrMapping), type: "json" },
+                { ownerId: productGid, namespace: "ikarus_delta", key: "use_as_attributes", value: useAsAttributes ? "true" : "false", type: "single_line_text_field" },
               ],
             },
           }
