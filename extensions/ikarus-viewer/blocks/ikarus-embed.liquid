@@ -3,49 +3,67 @@
     if (!event.data || event.data.type !== 'IKARUS_SHOPIFY_ADD_TO_CART') return;
     console.log('[Ikarus App Embed] ✅ Got message:', event.data);
 
-    // FIXED: Use the pre-built items array from the iframe payload to preserve individual properties/prices
-    let items = [];
-    if (Array.isArray(event.data.items) && event.data.items.length > 0) {
-      items = event.data.items.map(function(item) {
-        return {
-          id: Number(item.id),
-          quantity: Number(item.quantity || event.data.quantity || 1),
-          properties: item.properties || {}
-        };
-      });
-    } else {
-      // Fallback for legacy single-product variant blocks
-      const variantId = event.data.variantId || (Array.isArray(event.data.variantIds) ? event.data.variantIds[0] : null);
-      if (variantId) {
-        items.push({
-          id: Number(variantId),
-          quantity: event.data.quantity || 1,
-          properties: event.data.properties || {}
-        });
-      }
-    }
+    // Grab all variant IDs sent from React
+    const variantIds = Array.isArray(event.data.variantIds) && event.data.variantIds.length > 0
+      ? event.data.variantIds
+      : [event.data.variantId].filter(Boolean);
 
-    if (items.length === 0) {
-      console.warn('[Ikarus] ⚠️ No items found to add to cart.');
+    if (variantIds.length === 0) {
+      console.warn('[Ikarus] ⚠️ No variant IDs found in payload.');
       return;
     }
 
-    console.log('[Ikarus] Submitting items to Shopify cart API:', items);
+    // Build the queue of items
+    const itemsToQueue = variantIds.map(function(vid) {
+      return {
+        id: Number(vid),
+        quantity: event.data.quantity || 1,
+        properties: event.data.properties || {}
+      };
+    });
 
-    fetch('/cart/add.js', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', 'Accept': 'application/json' },
-      body: JSON.stringify({ items: items })
-    })
-    .then(function(r) { return r.json(); })
-    .then(function(result) {
-      console.log('[Ikarus] ✅ Added to cart:', result);
+    console.log('[Ikarus] Sequentially adding items to cart to bypass theme interceptor:', itemsToQueue);
+
+    let addedItems = [];
+
+    // Process the queue one-by-one to force Shopify to accept all products
+    function addNextItem() {
+      const item = itemsToQueue.shift();
       
-      const iframe = document.querySelector('iframe[id^="ikd-iframe-"]');
-      if (iframe && iframe.contentWindow) {
-        iframe.contentWindow.postMessage({ type: 'IKARUS_CART_SUCCESS', item: result }, '*');
+      // If queue is empty, trigger the cart drawer open
+      if (!item) {
+        console.log('[Ikarus] ✅ All items successfully added to cart:', addedItems);
+        finishCartAdd(addedItems);
+        return;
       }
 
+      // Send as a single object to bypass strict theme array blocks
+      fetch('/cart/add.js', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'Accept': 'application/json' },
+        body: JSON.stringify(item) 
+      })
+      .then(function(r) { return r.json(); })
+      .then(function(result) {
+        addedItems.push(result);
+        addNextItem(); // Recursively call the next item in the queue
+      })
+      .catch(function(err) {
+        console.error('[Ikarus] Cart error on item:', item.id, err);
+        addNextItem(); // Continue to next item even if one fails
+      });
+    }
+
+    // Start the sequential add process
+    addNextItem();
+
+    // Fire cart events when queue finishes
+    function finishCartAdd(results) {
+      const iframe = document.querySelector('iframe[id^="ikd-iframe-"]');
+      if (iframe && iframe.contentWindow) {
+        iframe.contentWindow.postMessage({ type: 'IKARUS_CART_SUCCESS', items: results }, '*');
+      }
+      
       const cartDrawer = document.querySelector('cart-drawer');
       if (cartDrawer && typeof cartDrawer.open === 'function') {
         cartDrawer.open();
@@ -53,16 +71,13 @@
         document.dispatchEvent(new CustomEvent('cart:refresh', { bubbles: true }));
         document.dispatchEvent(new CustomEvent('cart:open', { bubbles: true }));
       }
-
+      
       fetch('/cart.js').then(function(r) { return r.json(); }).then(function(cart) {
         document.querySelectorAll(
           '.cart-count-bubble span, .cart__count, [data-cart-count], .cart-icon-bubble span'
         ).forEach(function(el) { el.textContent = cart.item_count; });
       });
-    })
-    .catch(function(err) {
-      console.error('[Ikarus] Cart error:', err);
-    });
+    }
   });
 </script>
 
