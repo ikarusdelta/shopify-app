@@ -14,16 +14,8 @@
     }
 
     // Build the queue of items
-    const bundleId = Date.now().toString();
-    const itemsToQueue = variantIds.map(function(vid, index) {
+    const itemsToQueue = variantIds.map(function(vid) {
       let props = Object.assign({}, event.data.properties || {});
-      
-      // If there are multiple variants, tag them as a bundle
-      if (variantIds.length > 1) {
-        props['_ikarus_bundle'] = bundleId;
-        props['_ikarus_role'] = index === 0 ? 'parent' : 'addon';
-      }
-
       return {
         id: Number(vid),
         quantity: event.data.quantity || 1,
@@ -31,7 +23,7 @@
       };
     });
 
-    console.log('[Ikarus] Sequentially adding items to cart to bypass theme interceptor:', itemsToQueue);
+    console.log('[Ikarus] Sequentially adding items to cart:', itemsToQueue);
 
     let addedItems = [];
 
@@ -46,7 +38,7 @@
         return;
       }
 
-      // Send as a single object to bypass strict theme array blocks
+      // Send as a single object to bypass theme interceptors
       fetch('/cart/add.js', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', 'Accept': 'application/json' },
@@ -89,177 +81,6 @@
       });
     }
   });
-
-  // --- Ikarus Cart Visual Merger ---
-  // This script attempts to find add-on items in the cart and hide them,
-  // while adding their price to the parent item.
-  (function() {
-    let lastCartState = null;
-
-    async function fetchCart() {
-      try {
-        const res = await fetch('/cart.js');
-        return await res.json();
-      } catch(e) {
-        return null;
-      }
-    }
-
-    // Helper to format money (fallback if Shopify format isn't available)
-    function formatMoney(cents) {
-      return (cents / 100).toFixed(2);
-    }
-
-    async function updateCartUI() {
-      const cart = await fetchCart();
-      if (!cart || !cart.items) return;
-      lastCartState = cart;
-
-      // Group by bundle
-      const bundles = {};
-      cart.items.forEach(function(item) {
-        if (item.properties && item.properties['_ikarus_bundle']) {
-          const bId = item.properties['_ikarus_bundle'];
-          if (!bundles[bId]) bundles[bId] = { parent: null, addons: [], totalPrice: 0, totalAddonOptions: [] };
-          
-          bundles[bId].totalPrice += item.original_line_price;
-
-          if (item.properties['_ikarus_role'] === 'parent') {
-            bundles[bId].parent = item;
-          } else {
-            bundles[bId].addons.push(item);
-            if (item.variant_title && item.variant_title !== 'Default Title') {
-              bundles[bId].totalAddonOptions.push(item.variant_title);
-            }
-          }
-        }
-      });
-
-      // Hide addons and update parents
-      Object.keys(bundles).forEach(function(bId) {
-        const bundle = bundles[bId];
-        if (!bundle.parent) return;
-
-        // Hide addons
-        bundle.addons.forEach(function(addon) {
-          const addonEl = findCartItemElement(addon.key) || findCartItemElement(addon.variant_id);
-          if (addonEl) {
-            addonEl.style.display = 'none';
-            addonEl.classList.add('ikarus-hidden-addon');
-          }
-        });
-
-        // Update parent
-        const parentEl = findCartItemElement(bundle.parent.key) || findCartItemElement(bundle.parent.variant_id);
-        if (parentEl) {
-          const formattedPrice = formatMoney(bundle.totalPrice);
-          const originalFormattedPrice = formatMoney(bundle.parent.original_line_price);
-
-          // 1. Update Price
-          const priceEls = parentEl.querySelectorAll('.price, .cart-item__price, .money, [data-cart-item-price]');
-          if (priceEls.length > 0) {
-            priceEls.forEach(function(el) {
-               if (!el.hasAttribute('data-ikarus-modified')) {
-                 el.setAttribute('data-ikarus-modified', 'true');
-               }
-               el.innerText = el.innerText.replace(/[0-9.,]+/, formattedPrice);
-            });
-          } else {
-            // Fallback: search all text nodes for the original price
-            const walker = document.createTreeWalker(parentEl, NodeFilter.SHOW_TEXT, null, false);
-            let node;
-            while (node = walker.nextNode()) {
-              if (node.nodeValue.includes(originalFormattedPrice) || node.nodeValue.includes(originalFormattedPrice.replace('.', ','))) {
-                node.nodeValue = node.nodeValue.replace(/[0-9.,]+/, formattedPrice);
-              }
-            }
-          }
-
-          // 2. Append Addon Options to Parent Title
-          if (bundle.totalAddonOptions.length > 0) {
-             const addonOptionsStr = bundle.totalAddonOptions.join(' / ');
-             
-             // Look for the parent's variant title element (usually a <dd> or <p> or <span class="product-option">)
-             // or just search text nodes for the parent's variant title
-             if (bundle.parent.variant_title && bundle.parent.variant_title !== 'Default Title') {
-                const walker = document.createTreeWalker(parentEl, NodeFilter.SHOW_TEXT, null, false);
-                let node;
-                let found = false;
-                while (node = walker.nextNode()) {
-                  if (node.nodeValue.includes(bundle.parent.variant_title) && !node.parentNode.hasAttribute('data-ik-options-merged')) {
-                    node.nodeValue = node.nodeValue + ' / ' + addonOptionsStr;
-                    node.parentNode.setAttribute('data-ik-options-merged', 'true');
-                    found = true;
-                    break;
-                  }
-                }
-                
-                // If text node replacement didn't work, append a div under the product title
-                if (!found && !parentEl.hasAttribute('data-ik-options-appended')) {
-                  parentEl.setAttribute('data-ik-options-appended', 'true');
-                  const titleAnchor = parentEl.querySelector('a[href*="' + bundle.parent.url.split('?')[0] + '"], .cart-item__name, .product-title');
-                  if (titleAnchor) {
-                    const extraOpts = document.createElement('div');
-                    extraOpts.style.fontSize = '0.9em';
-                    extraOpts.style.color = '#666';
-                    extraOpts.style.marginTop = '4px';
-                    extraOpts.innerText = addonOptionsStr;
-                    titleAnchor.parentNode.insertBefore(extraOpts, titleAnchor.nextSibling);
-                  }
-                }
-             }
-          }
-        }
-      });
-    }
-
-    function findCartItemElement(identifier) {
-      const selectors = [
-        '[data-key="' + identifier + '"]',
-        '[data-cart-item-key="' + identifier + '"]',
-        '[data-item-key="' + identifier + '"]',
-        '#CartItem-' + identifier,
-        '.cart-item[data-variant-id="' + identifier + '"]'
-      ];
-      for (let i = 0; i < selectors.length; i++) {
-        const el = document.querySelector(selectors[i]);
-        if (el) return el.closest('tr, li, .cart-item, .cart__row');
-      }
-      const links = document.querySelectorAll('a[href*="' + identifier + '"]');
-      if (links.length > 0) {
-        for (let i = 0; i < links.length; i++) {
-          const row = links[i].closest('tr, li, .cart-item, .cart__row');
-          if (row) return row;
-        }
-      }
-      return null;
-    }
-
-    if (document.readyState === 'complete') {
-      updateCartUI();
-    } else {
-      window.addEventListener('load', updateCartUI);
-    }
-
-    document.addEventListener('cart:refresh', updateCartUI);
-    document.addEventListener('cart:updated', updateCartUI);
-    
-    let debounceTimer;
-    const observer = new MutationObserver(function(mutations) {
-      let shouldUpdate = false;
-      mutations.forEach(function(m) {
-        if (m.addedNodes.length > 0) {
-          shouldUpdate = true;
-        }
-      });
-      if (shouldUpdate) {
-        clearTimeout(debounceTimer);
-        debounceTimer = setTimeout(updateCartUI, 500);
-      }
-    });
-
-    observer.observe(document.body, { childList: true, subtree: true });
-  })();
 </script>
 
 {% schema %}
