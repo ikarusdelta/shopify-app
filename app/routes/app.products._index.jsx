@@ -336,10 +336,10 @@ export const action = async ({ request }) => {
     const basePrice = parseFloat(basePriceRaw) || 0;
     const useAsAttributes = formData.get("useAsAttributes") === "true";
 
-    console.log(`[Ikarus Save] Saving config for product ${productId}, useAsAttributes: ${useAsAttributes}`);
+    console.log(`[Ikarus Save] Saving config for product ${productId}, projectId: ${projectId}, useAsAttributes: ${useAsAttributes}`);
 
     try {
-      // 1. Save to Local Database (Added useAsAttributes persistence tracking)
+      // 1. Save to Local Database (with useAsAttributes explicit tracking)
       await prisma.productConfig.upsert({
         where: { shop_productId: { shop: session.shop, productId } },
         update: { projectId, attrMapping: attrMappingRaw, useAsAttributes },
@@ -590,7 +590,6 @@ function ProductConfigPage() {
   const initialBasePrice = product?.variants?.nodes?.[0]?.price || "0";
   const [basePrice, setBasePrice] = useState(initialBasePrice);
   
-  // Fixed: Initialize checkbox state from loader configuration record payload
   const [useAsAttributes, setUseAsAttributes] = useState(savedUseAsAttributes || false);
 
   useEffect(() => {
@@ -1139,7 +1138,8 @@ function ProductConfigPage() {
                     projectId,
                     attrMapping: JSON.stringify(mapRows),
                     basePrice,
-                    useAsAttributes
+                    // Explicitly cast to clean string literal values to align with action parsing
+                    useAsAttributes: useAsAttributes ? "true" : "false"
                   }, setIsSaving, null, "✅ Configuration saved successfully!");
                 }} id="save-config-form">
                   <s-stack direction="inline">
@@ -1194,7 +1194,8 @@ function ProductConfigPage() {
                   attrMapping: JSON.stringify(mapRows),
                   basePrice,
                   projectId,
-                  useAsAttributes
+                  // Explicitly cast to clean string literal values here too
+                  useAsAttributes: useAsAttributes ? "true" : "false"
                 }, setIsCreatingVars, (data) => setVariationSuccessMsg(`✅ Done! Prices synced for ${data.updatedCount} variants based on your attribute map.`));
               }}>
                 <button
