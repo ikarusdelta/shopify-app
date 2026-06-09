@@ -14,11 +14,20 @@
     }
 
     // Build the queue of items
-    const itemsToQueue = variantIds.map(function(vid) {
+    const bundleId = Date.now().toString();
+    const itemsToQueue = variantIds.map(function(vid, index) {
+      let props = Object.assign({}, event.data.properties || {});
+      
+      // If there are multiple variants, tag them as a bundle
+      if (variantIds.length > 1) {
+        props['_ikarus_bundle'] = bundleId;
+        props['_ikarus_role'] = index === 0 ? 'parent' : 'addon';
+      }
+
       return {
         id: Number(vid),
         quantity: event.data.quantity || 1,
-        properties: event.data.properties || {}
+        properties: props
       };
     });
 
@@ -79,6 +88,127 @@
       });
     }
   });
+
+  // --- Ikarus Cart Visual Merger ---
+  // This script attempts to find add-on items in the cart and hide them,
+  // while adding their price to the parent item.
+  (function() {
+    let lastCartState = null;
+
+    async function fetchCart() {
+      try {
+        const res = await fetch('/cart.js');
+        return await res.json();
+      } catch(e) {
+        return null;
+      }
+    }
+
+    async function updateCartUI() {
+      const cart = await fetchCart();
+      if (!cart || !cart.items) return;
+      lastCartState = cart;
+
+      // Group by bundle
+      const bundles = {};
+      cart.items.forEach(function(item) {
+        if (item.properties && item.properties['_ikarus_bundle']) {
+          const bId = item.properties['_ikarus_bundle'];
+          if (!bundles[bId]) bundles[bId] = { parent: null, addons: [], totalPrice: 0 };
+          
+          bundles[bId].totalPrice += item.original_line_price; // Summing total line price
+
+          if (item.properties['_ikarus_role'] === 'parent') {
+            bundles[bId].parent = item;
+          } else {
+            bundles[bId].addons.push(item);
+          }
+        }
+      });
+
+      // Now attempt to hide addons in the DOM and update parent prices
+      Object.keys(bundles).forEach(function(bId) {
+        const bundle = bundles[bId];
+        if (!bundle.parent) return;
+
+        // Hide addons
+        bundle.addons.forEach(function(addon) {
+          const addonEl = findCartItemElement(addon.key) || findCartItemElement(addon.variant_id);
+          if (addonEl) {
+            addonEl.style.display = 'none';
+            addonEl.classList.add('ikarus-hidden-addon');
+          }
+        });
+
+        // Update parent price
+        const parentEl = findCartItemElement(bundle.parent.key) || findCartItemElement(bundle.parent.variant_id);
+        if (parentEl) {
+          // Convert cents to standard currency format (rough fallback)
+          // We use the cart's formatted total as a hint, or just generic formatting
+          const formattedPrice = (bundle.totalPrice / 100).toFixed(2);
+          
+          const priceEls = parentEl.querySelectorAll('.price, .cart-item__price, .money, [data-cart-item-price]');
+          priceEls.forEach(function(el) {
+             if (!el.hasAttribute('data-ikarus-modified')) {
+               el.setAttribute('data-ikarus-modified', 'true');
+             }
+             // Preserve currency symbols (e.g. $ or Rs or €) and only replace numbers
+             el.innerText = el.innerText.replace(/[0-9.,]+/, formattedPrice);
+          });
+        }
+      });
+    }
+
+    function findCartItemElement(identifier) {
+      const selectors = [
+        '[data-key="' + identifier + '"]',
+        '[data-cart-item-key="' + identifier + '"]',
+        '[data-item-key="' + identifier + '"]',
+        '#CartItem-' + identifier,
+        '.cart-item[data-variant-id="' + identifier + '"]'
+      ];
+      for (let i = 0; i < selectors.length; i++) {
+        const el = document.querySelector(selectors[i]);
+        if (el) return el.closest('tr, li, .cart-item, .cart__row');
+      }
+      const links = document.querySelectorAll('a[href*="' + identifier + '"]');
+      if (links.length > 0) {
+        for (let i = 0; i < links.length; i++) {
+          const row = links[i].closest('tr, li, .cart-item, .cart__row');
+          if (row) return row;
+        }
+      }
+      return null;
+    }
+
+    // Attempt an initial run
+    if (document.readyState === 'complete') {
+      updateCartUI();
+    } else {
+      window.addEventListener('load', updateCartUI);
+    }
+
+    // Run when standard cart events fire
+    document.addEventListener('cart:refresh', updateCartUI);
+    document.addEventListener('cart:updated', updateCartUI);
+    
+    // Generic mutation observer for dynamic AJAX carts
+    let debounceTimer;
+    const observer = new MutationObserver(function(mutations) {
+      let shouldUpdate = false;
+      mutations.forEach(function(m) {
+        if (m.addedNodes.length > 0) {
+          shouldUpdate = true;
+        }
+      });
+      if (shouldUpdate) {
+        clearTimeout(debounceTimer);
+        debounceTimer = setTimeout(updateCartUI, 500);
+      }
+    });
+
+    observer.observe(document.body, { childList: true, subtree: true });
+  })();
 </script>
 
 {% schema %}
