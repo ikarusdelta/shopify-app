@@ -59,6 +59,7 @@
       })
       .catch(function(err) {
         console.error('[Ikarus] Cart error on item:', item.id, err);
+        alert('Ikarus Error: Failed to add variant ' + item.id + ' to cart. Please check your mapping.');
         addNextItem(); // Continue to next item even if one fails
       });
     }
@@ -104,6 +105,11 @@
       }
     }
 
+    // Helper to format money (fallback if Shopify format isn't available)
+    function formatMoney(cents) {
+      return (cents / 100).toFixed(2);
+    }
+
     async function updateCartUI() {
       const cart = await fetchCart();
       if (!cart || !cart.items) return;
@@ -114,19 +120,22 @@
       cart.items.forEach(function(item) {
         if (item.properties && item.properties['_ikarus_bundle']) {
           const bId = item.properties['_ikarus_bundle'];
-          if (!bundles[bId]) bundles[bId] = { parent: null, addons: [], totalPrice: 0 };
+          if (!bundles[bId]) bundles[bId] = { parent: null, addons: [], totalPrice: 0, totalAddonOptions: [] };
           
-          bundles[bId].totalPrice += item.original_line_price; // Summing total line price
+          bundles[bId].totalPrice += item.original_line_price;
 
           if (item.properties['_ikarus_role'] === 'parent') {
             bundles[bId].parent = item;
           } else {
             bundles[bId].addons.push(item);
+            if (item.variant_title && item.variant_title !== 'Default Title') {
+              bundles[bId].totalAddonOptions.push(item.variant_title);
+            }
           }
         }
       });
 
-      // Now attempt to hide addons in the DOM and update parent prices
+      // Hide addons and update parents
       Object.keys(bundles).forEach(function(bId) {
         const bundle = bundles[bId];
         if (!bundle.parent) return;
@@ -140,21 +149,66 @@
           }
         });
 
-        // Update parent price
+        // Update parent
         const parentEl = findCartItemElement(bundle.parent.key) || findCartItemElement(bundle.parent.variant_id);
         if (parentEl) {
-          // Convert cents to standard currency format (rough fallback)
-          // We use the cart's formatted total as a hint, or just generic formatting
-          const formattedPrice = (bundle.totalPrice / 100).toFixed(2);
-          
+          const formattedPrice = formatMoney(bundle.totalPrice);
+          const originalFormattedPrice = formatMoney(bundle.parent.original_line_price);
+
+          // 1. Update Price
           const priceEls = parentEl.querySelectorAll('.price, .cart-item__price, .money, [data-cart-item-price]');
-          priceEls.forEach(function(el) {
-             if (!el.hasAttribute('data-ikarus-modified')) {
-               el.setAttribute('data-ikarus-modified', 'true');
+          if (priceEls.length > 0) {
+            priceEls.forEach(function(el) {
+               if (!el.hasAttribute('data-ikarus-modified')) {
+                 el.setAttribute('data-ikarus-modified', 'true');
+               }
+               el.innerText = el.innerText.replace(/[0-9.,]+/, formattedPrice);
+            });
+          } else {
+            // Fallback: search all text nodes for the original price
+            const walker = document.createTreeWalker(parentEl, NodeFilter.SHOW_TEXT, null, false);
+            let node;
+            while (node = walker.nextNode()) {
+              if (node.nodeValue.includes(originalFormattedPrice) || node.nodeValue.includes(originalFormattedPrice.replace('.', ','))) {
+                node.nodeValue = node.nodeValue.replace(/[0-9.,]+/, formattedPrice);
+              }
+            }
+          }
+
+          // 2. Append Addon Options to Parent Title
+          if (bundle.totalAddonOptions.length > 0) {
+             const addonOptionsStr = bundle.totalAddonOptions.join(' / ');
+             
+             // Look for the parent's variant title element (usually a <dd> or <p> or <span class="product-option">)
+             // or just search text nodes for the parent's variant title
+             if (bundle.parent.variant_title && bundle.parent.variant_title !== 'Default Title') {
+                const walker = document.createTreeWalker(parentEl, NodeFilter.SHOW_TEXT, null, false);
+                let node;
+                let found = false;
+                while (node = walker.nextNode()) {
+                  if (node.nodeValue.includes(bundle.parent.variant_title) && !node.parentNode.hasAttribute('data-ik-options-merged')) {
+                    node.nodeValue = node.nodeValue + ' / ' + addonOptionsStr;
+                    node.parentNode.setAttribute('data-ik-options-merged', 'true');
+                    found = true;
+                    break;
+                  }
+                }
+                
+                // If text node replacement didn't work, append a div under the product title
+                if (!found && !parentEl.hasAttribute('data-ik-options-appended')) {
+                  parentEl.setAttribute('data-ik-options-appended', 'true');
+                  const titleAnchor = parentEl.querySelector('a[href*="' + bundle.parent.url.split('?')[0] + '"], .cart-item__name, .product-title');
+                  if (titleAnchor) {
+                    const extraOpts = document.createElement('div');
+                    extraOpts.style.fontSize = '0.9em';
+                    extraOpts.style.color = '#666';
+                    extraOpts.style.marginTop = '4px';
+                    extraOpts.innerText = addonOptionsStr;
+                    titleAnchor.parentNode.insertBefore(extraOpts, titleAnchor.nextSibling);
+                  }
+                }
              }
-             // Preserve currency symbols (e.g. $ or Rs or €) and only replace numbers
-             el.innerText = el.innerText.replace(/[0-9.,]+/, formattedPrice);
-          });
+          }
         }
       });
     }
@@ -181,18 +235,15 @@
       return null;
     }
 
-    // Attempt an initial run
     if (document.readyState === 'complete') {
       updateCartUI();
     } else {
       window.addEventListener('load', updateCartUI);
     }
 
-    // Run when standard cart events fire
     document.addEventListener('cart:refresh', updateCartUI);
     document.addEventListener('cart:updated', updateCartUI);
     
-    // Generic mutation observer for dynamic AJAX carts
     let debounceTimer;
     const observer = new MutationObserver(function(mutations) {
       let shouldUpdate = false;
