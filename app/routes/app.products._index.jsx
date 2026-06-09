@@ -92,7 +92,7 @@ export const loader = async ({ request }) => {
     productOptions,
     projectId: config?.projectId || "",
     attrMapping: parsedMapping,
-    // Pass the saved checkbox state back to the UI (default to false if not yet saved)
+    // Safely cast database row value to explicit boolean flag
     useAsAttributes: config?.useAsAttributes === true,
     accessToken: settings?.accessToken || "",
     lambdaUrl: process.env.LAMBDA_URL || DEFAULT_LAMBDA_URL,
@@ -295,8 +295,7 @@ export const action = async ({ request }) => {
                     menuSlots: menuSlots,
                     varientMapping: variantMapping
                   }]
-                },
-                "use as attributes of product": useAsAttributes
+                }
               }),
             });
 
@@ -336,10 +335,10 @@ export const action = async ({ request }) => {
     const basePrice = parseFloat(basePriceRaw) || 0;
     const useAsAttributes = formData.get("useAsAttributes") === "true";
 
-    console.log(`[Ikarus Save] Saving config for product ${productId}, projectId: ${projectId}, useAsAttributes: ${useAsAttributes}`);
+    console.log(`[Ikarus Save] Saving config for product ${productId}, useAsAttributes: ${useAsAttributes}`);
 
     try {
-      // 1. Save to Local Database (with useAsAttributes explicit tracking)
+      // 1. Save to Local Database
       await prisma.productConfig.upsert({
         where: { shop_productId: { shop: session.shop, productId } },
         update: { projectId, attrMapping: attrMappingRaw, useAsAttributes },
@@ -348,7 +347,7 @@ export const action = async ({ request }) => {
 
       console.log(`[Ikarus Save] DB upsert successful.`);
 
-      // 2. Push to Ikarus Lambda API
+      // 2. Push to Ikarus Lambda API (Cleaned: useAsAttributes completely excluded from payload as requested)
       if (projectId && accessToken) {
         const menuPrices = {};
         const mapping = {};
@@ -383,8 +382,7 @@ export const action = async ({ request }) => {
               mapping,
               shopify: {
                 basePrice,
-              },
-              "use as attributes of product": useAsAttributes
+              }
             }),
           });
 
@@ -591,6 +589,11 @@ function ProductConfigPage() {
   const [basePrice, setBasePrice] = useState(initialBasePrice);
   
   const [useAsAttributes, setUseAsAttributes] = useState(savedUseAsAttributes || false);
+
+  // FIXED: Sync React UI checkbox value when the database loader resolves upon refresh
+  useEffect(() => {
+    setUseAsAttributes(savedUseAsAttributes);
+  }, [savedUseAsAttributes]);
 
   useEffect(() => {
     const warmUpSession = async () => {
@@ -1138,7 +1141,7 @@ function ProductConfigPage() {
                     projectId,
                     attrMapping: JSON.stringify(mapRows),
                     basePrice,
-                    // Explicitly cast to clean string literal values to align with action parsing
+                    // Explicitly format to string type for backend evaluation compatibility
                     useAsAttributes: useAsAttributes ? "true" : "false"
                   }, setIsSaving, null, "✅ Configuration saved successfully!");
                 }} id="save-config-form">
@@ -1194,7 +1197,6 @@ function ProductConfigPage() {
                   attrMapping: JSON.stringify(mapRows),
                   basePrice,
                   projectId,
-                  // Explicitly cast to clean string literal values here too
                   useAsAttributes: useAsAttributes ? "true" : "false"
                 }, setIsCreatingVars, (data) => setVariationSuccessMsg(`✅ Done! Prices synced for ${data.updatedCount} variants based on your attribute map.`));
               }}>
