@@ -13,12 +13,25 @@
       return;
     }
 
+    const bundleId = 'bundle_' + Date.now() + '_' + Math.random().toString(36).substr(2, 9);
+    const isBundle = variantIds.length > 1;
+
     // Build items array for Shopify AJAX API
-    const items = variantIds.map(function(vid) {
+    const items = variantIds.map(function(vid, index) {
+      const isParent = index === 0;
+      const baseProperties = event.data.properties || {};
+      
+      const properties = Object.assign({}, baseProperties);
+      if (isBundle) {
+        properties._bundle_id = bundleId;
+        properties._is_bundle_parent = isParent ? 'true' : 'false';
+        properties._is_bundle_child = isParent ? 'false' : 'true';
+      }
+
       return {
         id: Number(vid),
         quantity: event.data.quantity || 1,
-        properties: event.data.properties || {}
+        properties: properties
       };
     });
 
@@ -102,6 +115,72 @@
       addSequentially(items.slice(), []);
     });
   });
+
+  // --- Auto-Hide Bundle Children ---
+  // Periodically checks the cart page DOM and hides any items that are part of a bundle.
+  setInterval(function() {
+    if (!window.location.pathname.includes('/cart')) return;
+    
+    fetch('/cart.js')
+      .then(function(r) { return r.json(); })
+      .then(function(cart) {
+        var bundles = {};
+        
+        // Group items by bundle ID
+        cart.items.forEach(function(item) {
+          if (item.properties && item.properties._bundle_id) {
+            var bid = item.properties._bundle_id;
+            if (!bundles[bid]) bundles[bid] = { parent: null, children: [], totalPrice: 0, totalOriginalPrice: 0 };
+            
+            if (item.properties._is_bundle_parent === 'true') {
+              bundles[bid].parent = item;
+            } else if (item.properties._is_bundle_child === 'true') {
+              bundles[bid].children.push(item);
+            }
+            bundles[bid].totalPrice += item.final_line_price;
+            bundles[bid].totalOriginalPrice += item.original_line_price;
+          }
+        });
+
+        // Hide children and update parent prices
+        Object.keys(bundles).forEach(function(bid) {
+          var b = bundles[bid];
+          if (!b.parent || b.children.length === 0) return;
+
+          // 1. Hide children DOM elements
+          b.children.forEach(function(child) {
+            var keyStr = child.key;
+            // Try to find any element with this key in its ID or href, and hide its closest cart-item row
+            var els = document.querySelectorAll('[id*="' + keyStr + '"], [data-key="' + keyStr + '"], a[href*="' + keyStr + '"]');
+            els.forEach(function(el) {
+              var row = el.closest('tr, .cart-item');
+              if (row) {
+                row.style.setProperty('display', 'none', 'important');
+              }
+            });
+          });
+
+          // 2. Update parent price display
+          var parentKeyStr = b.parent.key;
+          var pEls = document.querySelectorAll('[id*="' + parentKeyStr + '"], [data-key="' + parentKeyStr + '"], a[href*="' + parentKeyStr + '"]');
+          pEls.forEach(function(el) {
+             var row = el.closest('tr, .cart-item');
+             if (row && !row.dataset.ikarusPriceUpdated) {
+                var priceEls = row.querySelectorAll('.price, .cart-item__price-wrapper, [data-cart-item-price]');
+                priceEls.forEach(function(pel) {
+                  var oldPriceStr = (b.parent.final_line_price / 100).toFixed(2);
+                  var newPriceStr = (b.totalPrice / 100).toFixed(2);
+                  if (pel.innerText.includes(oldPriceStr)) {
+                    pel.innerHTML = pel.innerHTML.replace(new RegExp(oldPriceStr, 'g'), newPriceStr);
+                  }
+                });
+                row.dataset.ikarusPriceUpdated = "true";
+             }
+          });
+        });
+      })
+      .catch(function(e) { /* ignore */ });
+  }, 1000);
 </script>
 
 {% schema %}
