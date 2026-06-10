@@ -13,7 +13,7 @@
       return;
     }
 
-    // Map to Shopify AJAX API items format
+    // Build items array for Shopify AJAX API
     const items = variantIds.map(function(vid) {
       return {
         id: Number(vid),
@@ -24,30 +24,15 @@
 
     console.log('[Ikarus] Adding items to Shopify cart:', items);
 
-    fetch('/cart/add.js', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Accept': 'application/json'
-      },
-      body: JSON.stringify({ items: items })
-    })
-    .then(function(r) {
-      if (!r.ok) {
-        throw new Error('HTTP error! status: ' + r.status);
-      }
-      return r.json();
-    })
-    .then(function(result) {
-      console.log('[Ikarus] ✅ Successfully added to cart:', result);
+    // --- Cart open / count refresh helper ---
+    function finishCartAdd(addedItems) {
+      console.log('[Ikarus] ✅ All done. Added items:', addedItems);
 
-      // Notify iframe of success
       const iframe = document.querySelector('iframe[id^="ikd-iframe-"]');
       if (iframe && iframe.contentWindow) {
-        iframe.contentWindow.postMessage({ type: 'IKARUS_CART_SUCCESS', items: result.items || [result] }, '*');
+        iframe.contentWindow.postMessage({ type: 'IKARUS_CART_SUCCESS', items: addedItems }, '*');
       }
 
-      // Trigger the cart drawer or dispatch cart open/refresh events
       const cartDrawer = document.querySelector('cart-drawer');
       if (cartDrawer && typeof cartDrawer.open === 'function') {
         cartDrawer.open();
@@ -56,7 +41,6 @@
         document.dispatchEvent(new CustomEvent('cart:open', { bubbles: true }));
       }
 
-      // Update cart count bubbles on page
       fetch('/cart.js')
         .then(function(r) { return r.json(); })
         .then(function(cart) {
@@ -64,9 +48,58 @@
             '.cart-count-bubble span, .cart__count, [data-cart-count], .cart-icon-bubble span'
           ).forEach(function(el) { el.textContent = cart.item_count; });
         });
+    }
+
+    // --- Sequential single-item fallback ---
+    function addSequentially(queue, added) {
+      var item = queue.shift();
+      if (!item) { finishCartAdd(added); return; }
+
+      fetch('/cart/add.js', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'Accept': 'application/json' },
+        body: JSON.stringify(item)
+      })
+      .then(function(r) { return r.json(); })
+      .then(function(result) {
+        console.log('[Ikarus] ✅ Sequential add succeeded:', result);
+        added.push(result);
+        addSequentially(queue, added);
+      })
+      .catch(function(err) {
+        console.error('[Ikarus] Sequential add failed for variant', item.id, err);
+        addSequentially(queue, added); // continue even on error
+      });
+    }
+
+    // --- Try bulk multi-add first ---
+    fetch('/cart/add.js', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'Accept': 'application/json' },
+      body: JSON.stringify({ items: items })
+    })
+    .then(function(r) {
+      if (r.ok) return r.json().then(function(result) { return { ok: true, result: result }; });
+      // Read Shopify's error body so we can log it before falling back
+      return r.json().then(function(errBody) { return { ok: false, status: r.status, errBody: errBody }; })
+               .catch(function() { return { ok: false, status: r.status, errBody: null }; });
+    })
+    .then(function(data) {
+      if (data.ok) {
+        // Bulk add worked
+        var addedItems = data.result.items || [data.result];
+        console.log('[Ikarus] ✅ Bulk add succeeded:', addedItems);
+        finishCartAdd(addedItems);
+      } else {
+        // Log what Shopify said and fall back to sequential
+        console.warn('[Ikarus] ⚠️ Bulk add returned', data.status, '– Shopify said:', data.errBody);
+        console.warn('[Ikarus] Falling back to sequential single-item adds...');
+        addSequentially(items.slice(), []);
+      }
     })
     .catch(function(err) {
-      console.error('[Ikarus] Cart error adding items:', err);
+      console.error('[Ikarus] Network error on bulk add, falling back:', err);
+      addSequentially(items.slice(), []);
     });
   });
 </script>
