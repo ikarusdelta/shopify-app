@@ -66,6 +66,9 @@ export const action = async ({ request }) => {
       try { attrMapping = JSON.parse(attrMappingRaw); } catch (e) {}
       const basePrice = parseFloat(formData.get("basePrice")?.toString() || "0") || 0;
       const useAsAttributes = formData.get("useAsAttributes") === "true";
+      const isParent = formData.get("isParent") === "true";
+      
+      console.log(`[API] CREATE_VARIATIONS -> isParent string: "${formData.get("isParent")}", parsed boolean: ${isParent}`);
 
       try {
         const existingRes = await admin.graphql(
@@ -163,7 +166,8 @@ export const action = async ({ request }) => {
                     {
                       productId: productId,
                       menuSlots: menuSlots,
-                      varientMapping: variantMapping
+                      varientMapping: variantMapping,
+                      isParent: isParent
                     }
                   ]
                 },
@@ -195,12 +199,15 @@ export const action = async ({ request }) => {
       }
       const basePrice = parseFloat(formData.get("basePrice")?.toString() || "0") || 0;
       const useAsAttributes = formData.get("useAsAttributes") === "true";
+      const isParent = formData.get("isParent") === "true";
+      
+      console.log(`[API] SAVE_CONFIG -> isParent string: "${formData.get("isParent")}", parsed boolean: ${isParent}`);
 
       try {
         await prisma.productConfig.upsert({
           where: { shop_productId: { shop: session.shop, productId } },
-          update: { projectId, attrMapping: attrMappingRaw, useAsAttributes },
-          create: { shop: session.shop, productId, projectId, attrMapping: attrMappingRaw, useAsAttributes },
+          update: { projectId, attrMapping: attrMappingRaw, useAsAttributes, isParent },
+          create: { shop: session.shop, productId, projectId, attrMapping: attrMappingRaw, useAsAttributes, isParent },
         });
 
         if (projectId && accessToken) {
@@ -227,8 +234,11 @@ export const action = async ({ request }) => {
                 menuPrices, 
                 mapping, 
                 shopify: { 
-                  // FIXED: Omit explicit top-level productId to stay within standard pricing context
-                  basePrice 
+                  basePrice,
+                  products: [{
+                    productId: productId,
+                    isParent: isParent,
+                  }]
                 },
                 "use as attributes of product": useAsAttributes
               }),
