@@ -164,8 +164,22 @@
         var vidStr = child.variant_id ? child.variant_id.toString() : '';
         var els = document.querySelectorAll('[id*="' + keyStr + '"], [data-key="' + keyStr + '"], a[href*="' + keyStr + '"], a[href*="' + keyEnc + '"], a[href*="' + vidStr + '"]');
         els.forEach(function(el) {
-          var row = el.closest('tr, .cart-item, .cart__row, .cart__item, .cart-line-item, [data-cart-item]');
-          if (row) row.style.setProperty('display', 'none', 'important');
+          var row = el.closest('tr, li, article, .cart-item, .cart__row, .cart__item, .cart-line-item, [data-cart-item], .CartItem, .cart-product, .item');
+          if (!row) {
+             // Fallback: look for any div whose class contains 'item' or 'row'
+             var curr = el.parentElement;
+             while(curr && curr !== document.body) {
+               if (curr.className && typeof curr.className === 'string' && (curr.className.toLowerCase().includes('item') || curr.className.toLowerCase().includes('row'))) {
+                 row = curr; break;
+               }
+               curr = curr.parentElement;
+             }
+          }
+          if (row) {
+             row.style.setProperty('display', 'none', 'important');
+          } else {
+             console.log("[Ikarus] Could not find wrapper for child variant", vidStr, el);
+          }
         });
       });
 
@@ -175,7 +189,16 @@
       var parentVidStr = b.parent.variant_id ? b.parent.variant_id.toString() : '';
       var pEls = document.querySelectorAll('[id*="' + parentKeyStr + '"], [data-key="' + parentKeyStr + '"], a[href*="' + parentKeyStr + '"], a[href*="' + parentKeyEnc + '"], a[href*="' + parentVidStr + '"]');
       pEls.forEach(function(el) {
-         var row = el.closest('tr, .cart-item, .cart__row, .cart__item, .cart-line-item, [data-cart-item]');
+         var row = el.closest('tr, li, article, .cart-item, .cart__row, .cart__item, .cart-line-item, [data-cart-item], .CartItem, .cart-product, .item');
+         if (!row) {
+             var curr = el.parentElement;
+             while(curr && curr !== document.body) {
+               if (curr.className && typeof curr.className === 'string' && (curr.className.toLowerCase().includes('item') || curr.className.toLowerCase().includes('row'))) {
+                 row = curr; break;
+               }
+               curr = curr.parentElement;
+             }
+         }
          if (row && !row.dataset.ikarusPriceUpdated) {
             var priceEls = row.querySelectorAll('.price, .cart-item__price-wrapper, [data-cart-item-price], .cart-item__totals, .cart__price, .cart-item__price, dd, span');
             priceEls.forEach(function(pel) {
