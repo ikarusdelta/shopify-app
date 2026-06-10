@@ -153,9 +153,10 @@
           b.children.forEach(function(child) {
             var keyStr = child.key;
             var keyEnc = encodeURIComponent(keyStr);
-            var els = document.querySelectorAll('[id*="' + keyStr + '"], [data-key="' + keyStr + '"], a[href*="' + keyStr + '"], a[href*="' + keyEnc + '"]');
+            var vidStr = child.variant_id.toString();
+            var els = document.querySelectorAll('[id*="' + keyStr + '"], [data-key="' + keyStr + '"], a[href*="' + keyStr + '"], a[href*="' + keyEnc + '"], a[href*="' + vidStr + '"]');
             els.forEach(function(el) {
-              var row = el.closest('tr, .cart-item');
+              var row = el.closest('tr, .cart-item, .cart__row, .cart__item, .cart-line-item, [data-cart-item]');
               if (row) row.style.setProperty('display', 'none', 'important');
             });
           });
@@ -163,11 +164,12 @@
           // 2. Update parent price display
           var parentKeyStr = b.parent.key;
           var parentKeyEnc = encodeURIComponent(parentKeyStr);
-          var pEls = document.querySelectorAll('[id*="' + parentKeyStr + '"], [data-key="' + parentKeyStr + '"], a[href*="' + parentKeyStr + '"], a[href*="' + parentKeyEnc + '"]');
+          var parentVidStr = b.parent.variant_id.toString();
+          var pEls = document.querySelectorAll('[id*="' + parentKeyStr + '"], [data-key="' + parentKeyStr + '"], a[href*="' + parentKeyStr + '"], a[href*="' + parentKeyEnc + '"], a[href*="' + parentVidStr + '"]');
           pEls.forEach(function(el) {
-             var row = el.closest('tr, .cart-item');
+             var row = el.closest('tr, .cart-item, .cart__row, .cart__item, .cart-line-item, [data-cart-item]');
              if (row && !row.dataset.ikarusPriceUpdated) {
-                var priceEls = row.querySelectorAll('.price, .cart-item__price-wrapper, [data-cart-item-price]');
+                var priceEls = row.querySelectorAll('.price, .cart-item__price-wrapper, [data-cart-item-price], .cart-item__totals, .cart__price, .cart-item__price, dd, span');
                 priceEls.forEach(function(pel) {
                   var oldPriceStr = (b.parent.final_line_price / 100).toFixed(2);
                   var newPriceStr = (b.totalPrice / 100).toFixed(2);
