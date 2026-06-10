@@ -152,7 +152,8 @@
           // 1. Hide children DOM elements
           b.children.forEach(function(child) {
             var keyStr = child.key;
-            var els = document.querySelectorAll('[id*="' + keyStr + '"], [data-key="' + keyStr + '"], a[href*="' + keyStr + '"]');
+            var keyEnc = encodeURIComponent(keyStr);
+            var els = document.querySelectorAll('[id*="' + keyStr + '"], [data-key="' + keyStr + '"], a[href*="' + keyStr + '"], a[href*="' + keyEnc + '"]');
             els.forEach(function(el) {
               var row = el.closest('tr, .cart-item');
               if (row) row.style.setProperty('display', 'none', 'important');
@@ -161,7 +162,8 @@
 
           // 2. Update parent price display
           var parentKeyStr = b.parent.key;
-          var pEls = document.querySelectorAll('[id*="' + parentKeyStr + '"], [data-key="' + parentKeyStr + '"], a[href*="' + parentKeyStr + '"]');
+          var parentKeyEnc = encodeURIComponent(parentKeyStr);
+          var pEls = document.querySelectorAll('[id*="' + parentKeyStr + '"], [data-key="' + parentKeyStr + '"], a[href*="' + parentKeyStr + '"], a[href*="' + parentKeyEnc + '"]');
           pEls.forEach(function(el) {
              var row = el.closest('tr, .cart-item');
              if (row && !row.dataset.ikarusPriceUpdated) {
