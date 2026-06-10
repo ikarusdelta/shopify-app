@@ -121,14 +121,14 @@
   });
 
   // --- Auto-Hide Bundle Children ---
-  // Runs ONLY once on page load and exactly when the cart updates (no polling).
-  function executeIkarusBundleVisuals() {
+  var cachedBundles = null;
+
+  // 1. Fetch cart mapping from Shopify API
+  function fetchCartAndBuildBundles() {
     fetch('/cart.js')
       .then(function(r) { return r.json(); })
       .then(function(cart) {
         var bundles = {};
-        
-        // Group items by bundle ID
         cart.items.forEach(function(item) {
           if (item.properties && item.properties._bundle_id) {
             var bid = item.properties._bundle_id;
@@ -143,77 +143,64 @@
             bundles[bid].totalOriginalPrice += item.original_line_price;
           }
         });
-
-        // Hide children and update parent prices
-        Object.keys(bundles).forEach(function(bid) {
-          var b = bundles[bid];
-          if (!b.parent || b.children.length === 0) return;
-
-          // 1. Hide children DOM elements
-          b.children.forEach(function(child) {
-            var keyStr = child.key;
-            var keyEnc = encodeURIComponent(keyStr);
-            var vidStr = child.variant_id.toString();
-            var els = document.querySelectorAll('[id*="' + keyStr + '"], [data-key="' + keyStr + '"], a[href*="' + keyStr + '"], a[href*="' + keyEnc + '"], a[href*="' + vidStr + '"]');
-            els.forEach(function(el) {
-              var row = el.closest('tr, .cart-item, .cart__row, .cart__item, .cart-line-item, [data-cart-item]');
-              if (row) row.style.setProperty('display', 'none', 'important');
-            });
-          });
-
-          // 2. Update parent price display
-          var parentKeyStr = b.parent.key;
-          var parentKeyEnc = encodeURIComponent(parentKeyStr);
-          var parentVidStr = b.parent.variant_id.toString();
-          var pEls = document.querySelectorAll('[id*="' + parentKeyStr + '"], [data-key="' + parentKeyStr + '"], a[href*="' + parentKeyStr + '"], a[href*="' + parentKeyEnc + '"], a[href*="' + parentVidStr + '"]');
-          pEls.forEach(function(el) {
-             var row = el.closest('tr, .cart-item, .cart__row, .cart__item, .cart-line-item, [data-cart-item]');
-             if (row && !row.dataset.ikarusPriceUpdated) {
-                var priceEls = row.querySelectorAll('.price, .cart-item__price-wrapper, [data-cart-item-price], .cart-item__totals, .cart__price, .cart-item__price, dd, span');
-                priceEls.forEach(function(pel) {
-                  var oldPriceStr = (b.parent.final_line_price / 100).toFixed(2);
-                  var newPriceStr = (b.totalPrice / 100).toFixed(2);
-                  if (pel.innerText.includes(oldPriceStr)) {
-                    pel.innerHTML = pel.innerHTML.replace(new RegExp(oldPriceStr, 'g'), newPriceStr);
-                  }
-                });
-                row.dataset.ikarusPriceUpdated = "true";
-             }
-          });
-        });
+        cachedBundles = bundles;
+        enforceBundleVisuals();
       })
-      .catch(function(e) { /* ignore */ });
+      .catch(function(e) { console.error('[Ikarus] Error fetching cart', e); });
   }
 
-  // Run on page load
-  document.addEventListener('DOMContentLoaded', executeIkarusBundleVisuals);
-  
-  // Run if our add to cart successfully finishes
+  // 2. Continually enforce DOM changes using cached data (No network requests!)
+  function enforceBundleVisuals() {
+    if (!cachedBundles) return;
+    
+    Object.keys(cachedBundles).forEach(function(bid) {
+      var b = cachedBundles[bid];
+      if (!b.parent || b.children.length === 0) return;
+
+      // Hide children
+      b.children.forEach(function(child) {
+        var keyStr = child.key;
+        var keyEnc = encodeURIComponent(keyStr);
+        var vidStr = child.variant_id ? child.variant_id.toString() : '';
+        var els = document.querySelectorAll('[id*="' + keyStr + '"], [data-key="' + keyStr + '"], a[href*="' + keyStr + '"], a[href*="' + keyEnc + '"], a[href*="' + vidStr + '"]');
+        els.forEach(function(el) {
+          var row = el.closest('tr, .cart-item, .cart__row, .cart__item, .cart-line-item, [data-cart-item]');
+          if (row) row.style.setProperty('display', 'none', 'important');
+        });
+      });
+
+      // Update parent price
+      var parentKeyStr = b.parent.key;
+      var parentKeyEnc = encodeURIComponent(parentKeyStr);
+      var parentVidStr = b.parent.variant_id ? b.parent.variant_id.toString() : '';
+      var pEls = document.querySelectorAll('[id*="' + parentKeyStr + '"], [data-key="' + parentKeyStr + '"], a[href*="' + parentKeyStr + '"], a[href*="' + parentKeyEnc + '"], a[href*="' + parentVidStr + '"]');
+      pEls.forEach(function(el) {
+         var row = el.closest('tr, .cart-item, .cart__row, .cart__item, .cart-line-item, [data-cart-item]');
+         if (row && !row.dataset.ikarusPriceUpdated) {
+            var priceEls = row.querySelectorAll('.price, .cart-item__price-wrapper, [data-cart-item-price], .cart-item__totals, .cart__price, .cart-item__price, dd, span');
+            priceEls.forEach(function(pel) {
+              var oldPriceStr = (b.parent.final_line_price / 100).toFixed(2);
+              var newPriceStr = (b.totalPrice / 100).toFixed(2);
+              if (pel.innerText.includes(oldPriceStr)) {
+                pel.innerHTML = pel.innerHTML.replace(new RegExp(oldPriceStr, 'g'), newPriceStr);
+              }
+            });
+            row.dataset.ikarusPriceUpdated = "true";
+         }
+      });
+    });
+  }
+
+  // Network triggers
+  document.addEventListener('DOMContentLoaded', fetchCartAndBuildBundles);
   window.addEventListener('message', function(event) {
     if (event.data && event.data.type === 'IKARUS_CART_SUCCESS') {
-       setTimeout(executeIkarusBundleVisuals, 500);
-       setTimeout(executeIkarusBundleVisuals, 1500); // safety net for slow animations
+       setTimeout(fetchCartAndBuildBundles, 500);
     }
   });
 
-  // Watch for Ajax Cart Drawer opening (DOM nodes being added)
-  var observer = new MutationObserver(function(mutations) {
-    for (var i = 0; i < mutations.length; i++) {
-      if (mutations[i].addedNodes.length > 0) {
-        // If a new cart-item appears, run the visuals
-        var hasCartItem = false;
-        mutations[i].addedNodes.forEach(function(node) {
-          if (node.nodeType === 1 && (node.classList.contains('cart-item') || node.querySelector('.cart-item, tr'))) {
-            hasCartItem = true;
-          }
-        });
-        if (hasCartItem) {
-          executeIkarusBundleVisuals();
-        }
-      }
-    }
-  });
-  observer.observe(document.body, { childList: true, subtree: true });
+  // DOM trigger (Runs 2 times a second, completely safe because it makes 0 network requests)
+  setInterval(enforceBundleVisuals, 500);
 </script>
 
 {% schema %}
