@@ -73,10 +73,14 @@
         headers: { 'Content-Type': 'application/json', 'Accept': 'application/json' },
         body: JSON.stringify(item)
       })
-      .then(function(r) { return r.json(); })
+      .then(function(r) { return r.json().then(function(res) { return { ok: r.ok, data: res }; }); })
       .then(function(result) {
-        console.log('[Ikarus] ✅ Sequential add succeeded:', result);
-        added.push(result);
+        if (result.ok) {
+          console.log('[Ikarus] ✅ Sequential add succeeded:', result.data);
+          added.push(result.data);
+        } else {
+          console.error('[Ikarus] ❌ Sequential add failed for variant', item.id, result.data);
+        }
         addSequentially(queue, added);
       })
       .catch(function(err) {

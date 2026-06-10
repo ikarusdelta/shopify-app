@@ -102,7 +102,11 @@ export const action = async ({ request }) => {
             const matchedItem = variantRow.items.find((item) => item.shopifyValue === variant.title);
             if (matchedItem) attributeAddonPrice += parseFloat(matchedItem.price) || 0;
           }
-          return { id: variant.id, price: (basePrice + attributeAddonPrice).toFixed(2) };
+          return { 
+            id: variant.id, 
+            price: (basePrice + attributeAddonPrice).toFixed(2),
+            inventoryItem: { tracked: false }
+          };
         });
 
         const res = await admin.graphql(
@@ -115,6 +119,12 @@ export const action = async ({ request }) => {
           { variables: { productId: productGid, variants: variantsToUpdate } }
         );
         const data = await res.json();
+        
+        if (data.errors) {
+          console.error("GraphQL Schema Error:", data.errors);
+          return Response.json({ variationError: `Shopify GraphQL Error: ${data.errors[0].message}` });
+        }
+        
         const errors = data.data?.productVariantsBulkUpdate?.userErrors;
         if (errors?.length > 0) {
           return Response.json({ variationError: `Shopify Error: ${errors.map(e => e.message).join(", ")}` });
