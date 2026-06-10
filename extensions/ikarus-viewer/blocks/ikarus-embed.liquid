@@ -13,59 +13,41 @@
       return;
     }
 
-    // Build the queue of items
-    const itemsToQueue = variantIds.map(function(vid) {
-      let props = Object.assign({}, event.data.properties || {});
+    // Map to Shopify AJAX API items format
+    const items = variantIds.map(function(vid) {
       return {
         id: Number(vid),
         quantity: event.data.quantity || 1,
-        properties: props
+        properties: event.data.properties || {}
       };
     });
 
-    console.log('[Ikarus] Sequentially adding items to cart:', itemsToQueue);
+    console.log('[Ikarus] Adding items to Shopify cart:', items);
 
-    let addedItems = [];
-
-    // Process the queue one-by-one to force Shopify to accept all products
-    function addNextItem() {
-      const item = itemsToQueue.shift();
-      
-      // If queue is empty, trigger the cart drawer open
-      if (!item) {
-        console.log('[Ikarus] ✅ All items successfully added to cart:', addedItems);
-        finishCartAdd(addedItems);
-        return;
+    fetch('/cart/add.js', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Accept': 'application/json'
+      },
+      body: JSON.stringify({ items: items })
+    })
+    .then(function(r) {
+      if (!r.ok) {
+        throw new Error('HTTP error! status: ' + r.status);
       }
+      return r.json();
+    })
+    .then(function(result) {
+      console.log('[Ikarus] ✅ Successfully added to cart:', result);
 
-      // Send as a single object to bypass theme interceptors
-      fetch('/cart/add.js', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', 'Accept': 'application/json' },
-        body: JSON.stringify(item) 
-      })
-      .then(function(r) { return r.json(); })
-      .then(function(result) {
-        addedItems.push(result);
-        addNextItem(); // Recursively call the next item in the queue
-      })
-      .catch(function(err) {
-        console.error('[Ikarus] Cart error on item:', item.id, err);
-        alert('Ikarus Error: Failed to add variant ' + item.id + ' to cart. Please check your mapping.');
-        addNextItem(); // Continue to next item even if one fails
-      });
-    }
-
-    // Start the sequential add process
-    addNextItem();
-
-    // Fire cart events when queue finishes
-    function finishCartAdd(results) {
+      // Notify iframe of success
       const iframe = document.querySelector('iframe[id^="ikd-iframe-"]');
       if (iframe && iframe.contentWindow) {
-        iframe.contentWindow.postMessage({ type: 'IKARUS_CART_SUCCESS', items: results }, '*');
+        iframe.contentWindow.postMessage({ type: 'IKARUS_CART_SUCCESS', items: result.items || [result] }, '*');
       }
-      
+
+      // Trigger the cart drawer or dispatch cart open/refresh events
       const cartDrawer = document.querySelector('cart-drawer');
       if (cartDrawer && typeof cartDrawer.open === 'function') {
         cartDrawer.open();
@@ -73,13 +55,19 @@
         document.dispatchEvent(new CustomEvent('cart:refresh', { bubbles: true }));
         document.dispatchEvent(new CustomEvent('cart:open', { bubbles: true }));
       }
-      
-      fetch('/cart.js').then(function(r) { return r.json(); }).then(function(cart) {
-        document.querySelectorAll(
-          '.cart-count-bubble span, .cart__count, [data-cart-count], .cart-icon-bubble span'
-        ).forEach(function(el) { el.textContent = cart.item_count; });
-      });
-    }
+
+      // Update cart count bubbles on page
+      fetch('/cart.js')
+        .then(function(r) { return r.json(); })
+        .then(function(cart) {
+          document.querySelectorAll(
+            '.cart-count-bubble span, .cart__count, [data-cart-count], .cart-icon-bubble span'
+          ).forEach(function(el) { el.textContent = cart.item_count; });
+        });
+    })
+    .catch(function(err) {
+      console.error('[Ikarus] Cart error adding items:', err);
+    });
   });
 </script>
 
