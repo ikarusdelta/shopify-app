@@ -121,10 +121,8 @@
   });
 
   // --- Auto-Hide Bundle Children ---
-  // Periodically checks the cart page DOM and hides any items that are part of a bundle.
-  setInterval(function() {
-    if (!window.location.pathname.includes('/cart')) return;
-    
+  // Runs ONLY once on page load and exactly when the cart updates (no polling).
+  function executeIkarusBundleVisuals() {
     fetch('/cart.js')
       .then(function(r) { return r.json(); })
       .then(function(cart) {
@@ -154,13 +152,10 @@
           // 1. Hide children DOM elements
           b.children.forEach(function(child) {
             var keyStr = child.key;
-            // Try to find any element with this key in its ID or href, and hide its closest cart-item row
             var els = document.querySelectorAll('[id*="' + keyStr + '"], [data-key="' + keyStr + '"], a[href*="' + keyStr + '"]');
             els.forEach(function(el) {
               var row = el.closest('tr, .cart-item');
-              if (row) {
-                row.style.setProperty('display', 'none', 'important');
-              }
+              if (row) row.style.setProperty('display', 'none', 'important');
             });
           });
 
@@ -184,7 +179,37 @@
         });
       })
       .catch(function(e) { /* ignore */ });
-  }, 3000);
+  }
+
+  // Run on page load
+  document.addEventListener('DOMContentLoaded', executeIkarusBundleVisuals);
+  
+  // Run if our add to cart successfully finishes
+  window.addEventListener('message', function(event) {
+    if (event.data && event.data.type === 'IKARUS_CART_SUCCESS') {
+       setTimeout(executeIkarusBundleVisuals, 500);
+       setTimeout(executeIkarusBundleVisuals, 1500); // safety net for slow animations
+    }
+  });
+
+  // Watch for Ajax Cart Drawer opening (DOM nodes being added)
+  var observer = new MutationObserver(function(mutations) {
+    for (var i = 0; i < mutations.length; i++) {
+      if (mutations[i].addedNodes.length > 0) {
+        // If a new cart-item appears, run the visuals
+        var hasCartItem = false;
+        mutations[i].addedNodes.forEach(function(node) {
+          if (node.nodeType === 1 && (node.classList.contains('cart-item') || node.querySelector('.cart-item, tr'))) {
+            hasCartItem = true;
+          }
+        });
+        if (hasCartItem) {
+          executeIkarusBundleVisuals();
+        }
+      }
+    }
+  });
+  observer.observe(document.body, { childList: true, subtree: true });
 </script>
 
 {% schema %}
