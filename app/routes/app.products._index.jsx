@@ -84,6 +84,25 @@ export const loader = async ({ request }) => {
     parsedMapping = [];
   }
 
+  // Check if a sibling product (same projectId, same shop) already holds the parent role
+  const currentProjectId = config?.projectId || "";
+  let parentSetBySibling = false;
+  if (currentProjectId) {
+    const siblingParent = await prisma.productConfig.findFirst({
+      where: {
+        shop: session.shop,
+        projectId: currentProjectId,
+        productId: { not: productId },
+        isParent: true,
+      },
+    });
+    parentSetBySibling = !!siblingParent;
+  }
+
+  // Auto-parent: if no sibling holds the parent role, default this product to parent
+  const savedIsParent = config?.isParent === true;
+  const effectiveIsParent = savedIsParent || !parentSetBySibling;
+
   return {
     type: "detail",
     shop: session.shop,
@@ -94,6 +113,8 @@ export const loader = async ({ request }) => {
     attrMapping: parsedMapping,
     // Safely cast database row value to explicit boolean flag
     useAsAttributes: config?.useAsAttributes === true,
+    isParent: effectiveIsParent,
+    parentSetBySibling,
     accessToken: settings?.accessToken || "",
     lambdaUrl: process.env.LAMBDA_URL || DEFAULT_LAMBDA_URL,
   };
@@ -158,6 +179,7 @@ export const action = async ({ request }) => {
       const basePriceRaw = formData.get("basePrice")?.toString() || "0";
       const basePrice = parseFloat(basePriceRaw) || 0;
       const useAsAttributes = formData.get("useAsAttributes") === "true";
+      const isParent = formData.get("isParent") === "true";
 
       try {
         console.log(`[Ikarus Sync] Starting bulk price sync for base price: $${basePrice}`);
@@ -293,7 +315,8 @@ export const action = async ({ request }) => {
                   products: [{
                     productId: productId,
                     menuSlots: menuSlots,
-                    varientMapping: variantMapping
+                    varientMapping: variantMapping,
+                    isParent: isParent
                   }]
                 }
               }),
@@ -334,6 +357,7 @@ export const action = async ({ request }) => {
     const basePriceRaw = formData.get("basePrice")?.toString() || "0";
     const basePrice = parseFloat(basePriceRaw) || 0;
     const useAsAttributes = formData.get("useAsAttributes") === "true";
+    const isParent = formData.get("isParent") === "true";
 
     console.log(`[Ikarus Save] Saving config for product ${productId}, useAsAttributes: ${useAsAttributes}`);
 
@@ -341,8 +365,8 @@ export const action = async ({ request }) => {
       // 1. Save to Local Database
       await prisma.productConfig.upsert({
         where: { shop_productId: { shop: session.shop, productId } },
-        update: { projectId, attrMapping: attrMappingRaw, useAsAttributes },
-        create: { shop: session.shop, productId, projectId, attrMapping: attrMappingRaw, useAsAttributes },
+        update: { projectId, attrMapping: attrMappingRaw, useAsAttributes, isParent },
+        create: { shop: session.shop, productId, projectId, attrMapping: attrMappingRaw, useAsAttributes, isParent },
       });
 
       console.log(`[Ikarus Save] DB upsert successful.`);
@@ -382,6 +406,10 @@ export const action = async ({ request }) => {
               mapping,
               shopify: {
                 basePrice,
+                products: [{
+                  productId: productId,
+                  isParent: isParent,
+                }]
               }
             }),
           });
@@ -516,7 +544,7 @@ export default function ProductsPage() {
 }
 
 function ProductConfigPage() {
-  const { product, projectId: savedProjectId, attrMapping: savedMapping, productOptions, useAsAttributes: savedUseAsAttributes } = useLoaderData();
+  const { product, projectId: savedProjectId, attrMapping: savedMapping, productOptions, useAsAttributes: savedUseAsAttributes, isParent: savedIsParent, parentSetBySibling } = useLoaderData();
   const actionData = useActionData();
   const navigation = useNavigation();
   const [isLoadingMenus, setIsLoadingMenus] = useState(false);
@@ -596,11 +624,16 @@ function ProductConfigPage() {
   const [basePrice, setBasePrice] = useState(initialBasePrice);
   
   const [useAsAttributes, setUseAsAttributes] = useState(savedUseAsAttributes || false);
+  const [isParent, setIsParent] = useState(savedIsParent || false);
 
-  // FIXED: Sync React UI checkbox value when the database loader resolves upon refresh
+  // FIXED: Sync React UI checkbox values when the database loader resolves upon refresh
   useEffect(() => {
     setUseAsAttributes(savedUseAsAttributes);
   }, [savedUseAsAttributes]);
+
+  useEffect(() => {
+    setIsParent(savedIsParent || false);
+  }, [savedIsParent]);
 
   useEffect(() => {
     const warmUpSession = async () => {
@@ -885,26 +918,62 @@ function ProductConfigPage() {
                 <label style={{ fontSize: "12px", fontWeight: "600", color: "#444" }}>
                   Base Product Price
                 </label>
-                <label style={{ 
-                  display: "flex", 
-                  alignItems: "center", 
-                  gap: "6px", 
-                  fontSize: "12px", 
-                  cursor: "pointer", 
-                  color: "#B83D24",
-                  fontWeight: "600"
-                }}>
-                  <input
-                    type="checkbox"
-                    checked={useAsAttributes}
-                    onChange={(e) => {
-                      const checked = e.target.checked;
-                      setUseAsAttributes(checked);
-                      if (checked) setBasePrice("0");
-                    }}
-                  />
-                  Use Product as attribute
-                </label>
+                <div style={{ display: "flex", gap: "16px", alignItems: "center" }}>
+                  {/* Parent Product checkbox */}
+                  <label style={{
+                    display: "flex",
+                    alignItems: "center",
+                    gap: "6px",
+                    fontSize: "12px",
+                    cursor: parentSetBySibling ? "not-allowed" : "pointer",
+                    color: "#2c6ecb",
+                    fontWeight: "600",
+                    opacity: parentSetBySibling ? 0.45 : 1,
+                    userSelect: "none",
+                  }}>
+                    <input
+                      type="checkbox"
+                      checked={isParent}
+                      disabled={parentSetBySibling}
+                      onChange={(e) => {
+                        const checked = e.target.checked;
+                        setIsParent(checked);
+                        if (checked) setUseAsAttributes(false);
+                      }}
+                    />
+                    Parent Product
+                    {parentSetBySibling && (
+                      <span style={{ fontSize: "10px", color: "#888", fontWeight: "400" }}>(set by sibling)</span>
+                    )}
+                  </label>
+                  {/* Use as Attribute checkbox */}
+                  <label style={{
+                    display: "flex",
+                    alignItems: "center",
+                    gap: "6px",
+                    fontSize: "12px",
+                    cursor: (isParent || parentSetBySibling) ? "not-allowed" : "pointer",
+                    color: "#B83D24",
+                    fontWeight: "600",
+                    opacity: (isParent || parentSetBySibling) ? 0.45 : 1,
+                    userSelect: "none",
+                  }}>
+                    <input
+                      type="checkbox"
+                      checked={useAsAttributes}
+                      disabled={isParent || parentSetBySibling}
+                      onChange={(e) => {
+                        const checked = e.target.checked;
+                        setUseAsAttributes(checked);
+                        if (checked) {
+                          setBasePrice("0");
+                          setIsParent(false);
+                        }
+                      }}
+                    />
+                    Use Product as attribute
+                  </label>
+                </div>
               </div>
               <div style={{
                 display: "flex",
@@ -1149,7 +1218,8 @@ function ProductConfigPage() {
                     attrMapping: JSON.stringify(mapRows),
                     basePrice,
                     // Explicitly format to string type for backend evaluation compatibility
-                    useAsAttributes: useAsAttributes ? "true" : "false"
+                    useAsAttributes: useAsAttributes ? "true" : "false",
+                    isParent: isParent ? "true" : "false"
                   }, setIsSaving, null, "✅ Configuration saved successfully!");
                 }} id="save-config-form">
                   <s-stack direction="inline">
@@ -1204,7 +1274,8 @@ function ProductConfigPage() {
                   attrMapping: JSON.stringify(mapRows),
                   basePrice,
                   projectId,
-                  useAsAttributes: useAsAttributes ? "true" : "false"
+                  useAsAttributes: useAsAttributes ? "true" : "false",
+                  isParent: isParent ? "true" : "false"
                 }, setIsCreatingVars, (data) => setVariationSuccessMsg(`✅ Done! Prices synced for ${data.updatedCount} variants based on your attribute map.`));
               }}>
                 <button

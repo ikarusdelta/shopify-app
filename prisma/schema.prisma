@@ -28,6 +28,7 @@ model ProductConfig {
   attrMapping     String @default("[]") // JSON: [{ shopifyOption, viewerMenu, items: [{shopifyValue, price, viewerOption}] }]
   selectedOptions String @default("[]") // JSON: [{ menu, option }]
   useAsAttributes Boolean @default(false)
+  isParent        Boolean @default(false)
 
   @@unique([shop, productId])
   }
