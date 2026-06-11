@@ -179,8 +179,10 @@
     // NOTE: [class*="cart-items"] is intentionally omitted — it can match table.cart-items
     // (the TABLE element), making > *:nth-child(N) target <tbody> instead of a cart row.
     // Use 'table.cart-items tbody' above for Dawn.
-    '[id*="cart-items"]',
-    '[id*="CartItems"]',
+    // NOTE: [id*="cart-items"] is intentionally omitted — it matches #custom-cart-items-wrapper
+    // (an Ikarus app block wrapper with 1 child div), so > *:nth-child(N) hides the wrapper div
+    // instead of an individual cart row. Use '#custom-cart-items-wrapper > div' below instead.
+    '#custom-cart-items-wrapper > div',
   ];
 
   // --- PRIMARY: CSS injection to hide child rows by position ---
@@ -259,6 +261,18 @@
       });
       console.log('[Ikarus] DIAG — containers used:', matched);
       console.log('[Ikarus] DIAG — all cart-like elements with children:', suspects);
+      // Extra: inspect #custom-cart-items-wrapper depth so we know if we need to go deeper
+      var ciw = document.querySelector('#custom-cart-items-wrapper');
+      if (ciw) {
+        var inner = ciw.children[0];
+        console.log('[Ikarus] DIAG — #custom-cart-items-wrapper direct child:', inner ? inner.tagName + '.' + (inner.className || '') : 'none', '| grandchildren count:', inner ? inner.children.length : 0);
+        if (inner && inner.children.length) {
+          var gcInfo = Array.from(inner.children).map(function(c, i) {
+            return i + ': ' + c.tagName + (c.id ? '#' + c.id : '') + (c.className ? '.' + c.className.trim().split(/\s+/).join('.') : '');
+          });
+          console.log('[Ikarus] DIAG — grandchildren:', gcInfo);
+        }
+      }
     }
   }
 
