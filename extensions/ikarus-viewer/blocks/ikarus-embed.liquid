@@ -74,9 +74,12 @@
       fetch('/cart.js')
         .then(function(r) { return r.json(); })
         .then(function(cart) {
-          document.querySelectorAll(
-            '.cart-count-bubble span, .cart__count, [data-cart-count], .cart-icon-bubble span'
-          ).forEach(function(el) { el.textContent = cart.item_count; });
+          // Subtract bundle child line items so the bubble shows the logical item count.
+          var childCount = cart.items.filter(function(item) {
+            return item.properties && item.properties._is_bundle_child === 'true';
+          }).length;
+          var displayCount = Math.max(0, cart.item_count - childCount);
+          _applyCartCountDisplay(displayCount);
         });
 
       // Re-fetch and rebuild bundle data now that items are in the cart.
@@ -144,6 +147,16 @@
 
   // --- Bundle Child Hiding & Parent Price Update ---
   var cachedBundles = null;
+  var cachedCartItemCount = 0;
+
+  function _applyCartCountDisplay(n) {
+    document.querySelectorAll(
+      '.cart-count-bubble span, .cart__count, [data-cart-count], .cart-icon-bubble span'
+    ).forEach(function(el) {
+      if (el.children.length > 0) return; // skip wrapper spans, only leaf nodes
+      el.textContent = n;
+    });
+  }
 
   // All cart containers we try (nth-child CSS and position-based JS both use this list).
   var IKARUS_CONTAINERS = [
@@ -389,13 +402,18 @@
   function enforceBundleVisuals() {
     if (!cachedBundles) return;
     applyBundleCSS(); // re-inject CSS on every tick (idempotent, no network)
+    var totalChildren = 0;
     Object.keys(cachedBundles).forEach(function(bid) {
       var b = cachedBundles[bid];
       if (b.parent && b.children.length) {
+        totalChildren += b.children.length;
         updateParentPrice(b);
         updateBundleVariantDisplay(b);
       }
     });
+    if (totalChildren > 0 && cachedCartItemCount > 0) {
+      _applyCartCountDisplay(Math.max(0, cachedCartItemCount - totalChildren));
+    }
   }
 
   function fetchCartAndBuildBundles() {
@@ -415,8 +433,9 @@
           }
         });
         cachedBundles = bundles;
+        cachedCartItemCount = cart.item_count;
         applyBundleCSS();      // inject CSS immediately
-        enforceBundleVisuals(); // then try price update
+        enforceBundleVisuals(); // then try price/variant/count update
 
         // One-shot delayed dump: fires 3s after bundles load to inspect the async-rendered
         // Ikarus cart block DOM. Needed because grandchildren count = 0 at initial DIAG time.
@@ -442,6 +461,51 @@
       })
       .catch(function(e) { console.error('[Ikarus] Error fetching cart', e); });
   }
+
+  // Intercept Remove button clicks on bundle PARENT rows.
+  // Uses capture phase so we fire before the Ikarus cart block's React handler.
+  // Non-bundle rows are untouched — we return early and the native handler runs.
+  document.addEventListener('click', function(event) {
+    var btn = event.target && event.target.closest
+      ? event.target.closest('.remove-btn, [class*="remove-btn"], [class*="RemoveButton"], [data-remove]')
+      : null;
+    if (!btn || !cachedBundles) return;
+
+    var cartLine = btn.closest('.cart-line, [class*="cart-line"]');
+    if (!cartLine) return;
+
+    var container = document.querySelector('.cart-items-container');
+    if (!container) return;
+    var lineIdx = Array.from(container.children).indexOf(cartLine) + 1; // 1-based
+    if (!lineIdx) return;
+
+    // Find the bundle whose PARENT lives at this line index
+    var match = null;
+    Object.keys(cachedBundles).forEach(function(bid) {
+      var b = cachedBundles[bid];
+      if (b.parent && b.parent._lineIndex === lineIdx) match = b;
+    });
+    if (!match) return; // not a bundle parent — let default handler run
+
+    // It IS a bundle parent — block the block's handler and remove everything
+    event.preventDefault();
+    event.stopPropagation();
+
+    var updates = {};
+    updates[match.parent.key] = 0;
+    match.children.forEach(function(c) { updates[c.key] = 0; });
+
+    fetch('/cart/update.js', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ updates: updates })
+    })
+    .then(function() { window.location.reload(); })
+    .catch(function(e) {
+      console.error('[Ikarus] Bundle remove failed:', e);
+      window.location.reload();
+    });
+  }, true /* capture phase */);
 
   document.addEventListener('DOMContentLoaded', fetchCartAndBuildBundles);
   window.addEventListener('message', function(event) {
