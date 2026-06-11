@@ -78,6 +78,11 @@
             '.cart-count-bubble span, .cart__count, [data-cart-count], .cart-icon-bubble span'
           ).forEach(function(el) { el.textContent = cart.item_count; });
         });
+
+      // Re-fetch and rebuild bundle data now that items are in the cart.
+      // The IKARUS_CART_SUCCESS postMessage goes TO the iframe (not from it),
+      // so the message listener below never fires — we call this directly instead.
+      setTimeout(fetchCartAndBuildBundles, 700);
     }
 
     // --- Sequential single-item fallback ---
@@ -146,11 +151,14 @@
       .then(function(r) { return r.json(); })
       .then(function(cart) {
         var bundles = {};
-        cart.items.forEach(function(item) {
+        cart.items.forEach(function(item, index) {
+          // Store 1-based line index so enforceBundleVisuals can target CartItem-N
+          item._lineIndex = index + 1;
+
           if (item.properties && item.properties._bundle_id) {
             var bid = item.properties._bundle_id;
             if (!bundles[bid]) bundles[bid] = { parent: null, children: [], totalPrice: 0, totalOriginalPrice: 0 };
-            
+
             if (item.properties._is_bundle_parent === 'true') {
               bundles[bid].parent = item;
             } else if (item.properties._is_bundle_child === 'true') {
@@ -166,6 +174,67 @@
       .catch(function(e) { console.error('[Ikarus] Error fetching cart', e); });
   }
 
+  // Find the DOM row for a cart item using multiple strategies.
+  // Dawn renders cart rows as <tr id="CartItem-N"> (1-indexed) on both the
+  // cart page and cart drawer, so the _lineIndex lookup is the most reliable.
+  function findCartItemRow(item) {
+    var lineIndex = item._lineIndex;
+    var keyStr = item.key || '';
+    var keyEnc = encodeURIComponent(keyStr);
+    var vidStr = item.variant_id ? item.variant_id.toString() : '';
+    var ROW_SELECTORS = 'tr, li, article, .cart-item, .cart__row, .cart__item, .cart-line-item, [data-cart-item], .CartItem, .cart-product';
+
+    // Strategy 1: CartItem-N / CartDrawer-Item-N (Dawn and Dawn-based themes)
+    if (lineIndex) {
+      var byIndex = document.getElementById('CartItem-' + lineIndex)
+        || document.getElementById('CartDrawer-Item-' + lineIndex)
+        || document.getElementById('cart-item-' + lineIndex);
+      if (byIndex) return byIndex;
+    }
+
+    // Strategy 2: data-key attribute (some Dawn versions, other modern themes)
+    if (keyStr) {
+      var byKey = document.querySelector('[data-key="' + keyStr + '"]');
+      if (byKey) {
+        var r = byKey.closest(ROW_SELECTORS);
+        return r || byKey;
+      }
+    }
+
+    // Strategy 3: data-variant-id attribute
+    if (vidStr) {
+      var byVid = document.querySelector('[data-variant-id="' + vidStr + '"], [data-product-variant-id="' + vidStr + '"]');
+      if (byVid) {
+        var r2 = byVid.closest(ROW_SELECTORS);
+        return r2 || byVid;
+      }
+    }
+
+    // Strategy 4: links whose href contains the cart key or variant ID
+    var linkSel = [];
+    if (keyStr) linkSel.push('a[href*="' + keyStr + '"]', 'a[href*="' + keyEnc + '"]', '[id*="' + keyStr + '"]');
+    if (vidStr) linkSel.push('a[href*="' + vidStr + '"]');
+    if (linkSel.length) {
+      var els = document.querySelectorAll(linkSel.join(', '));
+      for (var i = 0; i < els.length; i++) {
+        var r3 = els[i].closest(ROW_SELECTORS);
+        if (r3) return r3;
+      }
+    }
+
+    // Strategy 5: hidden inputs whose value is the variant ID (older themes)
+    if (vidStr) {
+      var inputs = document.querySelectorAll('input[value="' + vidStr + '"]');
+      for (var j = 0; j < inputs.length; j++) {
+        var r4 = inputs[j].closest(ROW_SELECTORS);
+        if (r4) return r4;
+      }
+    }
+
+    console.log('[Ikarus] ⚠️ Could not find cart row for variant', vidStr, '(line', lineIndex + ')');
+    return null;
+  }
+
   // 2. Continually enforce DOM changes using cached data (No network requests!)
   function enforceBundleVisuals() {
     if (!cachedBundles) return;
@@ -176,69 +245,34 @@
 
       // Hide children
       b.children.forEach(function(child) {
-        var keyStr = child.key;
-        var keyEnc = encodeURIComponent(keyStr);
-        var vidStr = child.variant_id ? child.variant_id.toString() : '';
-        var els = document.querySelectorAll('[id*="' + keyStr + '"], [data-key="' + keyStr + '"], a[href*="' + keyStr + '"], a[href*="' + keyEnc + '"], a[href*="' + vidStr + '"]');
-        els.forEach(function(el) {
-          var row = el.closest('tr, li, article, .cart-item, .cart__row, .cart__item, .cart-line-item, [data-cart-item], .CartItem, .cart-product, .item');
-          if (!row) {
-             // Fallback: look for any div whose class contains 'item' or 'row'
-             var curr = el.parentElement;
-             while(curr && curr !== document.body) {
-               if (curr.className && typeof curr.className === 'string' && (curr.className.toLowerCase().includes('item') || curr.className.toLowerCase().includes('row'))) {
-                 row = curr; break;
-               }
-               curr = curr.parentElement;
-             }
-          }
-          if (row) {
-             row.style.setProperty('display', 'none', 'important');
-          } else {
-             console.log("[Ikarus] Could not find wrapper for child variant", vidStr, el);
-          }
-        });
+        var row = findCartItemRow(child);
+        if (row) {
+          row.style.setProperty('display', 'none', 'important');
+        }
       });
 
-      // Update parent price
-      var parentKeyStr = b.parent.key;
-      var parentKeyEnc = encodeURIComponent(parentKeyStr);
-      var parentVidStr = b.parent.variant_id ? b.parent.variant_id.toString() : '';
-      var pEls = document.querySelectorAll('[id*="' + parentKeyStr + '"], [data-key="' + parentKeyStr + '"], a[href*="' + parentKeyStr + '"], a[href*="' + parentKeyEnc + '"], a[href*="' + parentVidStr + '"]');
-      pEls.forEach(function(el) {
-         var row = el.closest('tr, li, article, .cart-item, .cart__row, .cart__item, .cart-line-item, [data-cart-item], .CartItem, .cart-product, .item');
-         if (!row) {
-             var curr = el.parentElement;
-             while(curr && curr !== document.body) {
-               if (curr.className && typeof curr.className === 'string' && (curr.className.toLowerCase().includes('item') || curr.className.toLowerCase().includes('row'))) {
-                 row = curr; break;
-               }
-               curr = curr.parentElement;
-             }
-         }
-         if (row && !row.dataset.ikarusPriceUpdated) {
-            var oldCents = b.parent.final_line_price;
-            var newCents = b.totalPrice;
-            if (oldCents !== newCents) {
-              var oldStr = (oldCents / 100).toFixed(2);
-              var newStr = (newCents / 100).toFixed(2);
-              // Comma-formatted version for locales that use "3,000.00"
-              var oldStrComma = parseFloat(oldStr).toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2});
-              var newStrComma = parseFloat(newStr).toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2});
+      // Update parent price to show the combined bundle total
+      var parentRow = findCartItemRow(b.parent);
+      if (parentRow && !parentRow.dataset.ikarusPriceUpdated) {
+        var oldCents = b.parent.final_line_price;
+        var newCents = b.totalPrice;
+        if (oldCents !== newCents) {
+          var oldStr = (oldCents / 100).toFixed(2);
+          var newStr = (newCents / 100).toFixed(2);
+          var oldStrComma = parseFloat(oldStr).toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2});
+          var newStrComma = parseFloat(newStr).toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2});
 
-              var priceEls = row.querySelectorAll('.price, .cart-item__price-wrapper, [data-cart-item-price], .cart-item__totals, .cart__price, .cart-item__price, dd, span');
-              priceEls.forEach(function(pel) {
-                var text = pel.innerText || '';
-                if (text.includes(oldStr)) {
-                  pel.innerHTML = pel.innerHTML.replace(new RegExp(oldStr, 'g'), newStr);
-                } else if (oldStrComma !== oldStr && text.includes(oldStrComma)) {
-                  pel.innerHTML = pel.innerHTML.replace(new RegExp(oldStrComma.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'g'), newStrComma);
-                }
-              });
+          parentRow.querySelectorAll('.price, .cart-item__price-wrapper, [data-cart-item-price], .cart-item__totals, .cart__price, .cart-item__price, dd, span').forEach(function(pel) {
+            var text = pel.innerText || '';
+            if (text.includes(oldStr)) {
+              pel.innerHTML = pel.innerHTML.replace(new RegExp(oldStr, 'g'), newStr);
+            } else if (oldStrComma !== oldStr && text.includes(oldStrComma)) {
+              pel.innerHTML = pel.innerHTML.replace(new RegExp(oldStrComma.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'g'), newStrComma);
             }
-            row.dataset.ikarusPriceUpdated = "true";
-         }
-      });
+          });
+        }
+        parentRow.dataset.ikarusPriceUpdated = 'true';
+      }
     });
   }
 
