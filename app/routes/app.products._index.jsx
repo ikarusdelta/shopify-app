@@ -267,7 +267,10 @@ export const action = async ({ request }) => {
         const updatedVariants = data.data?.productVariantsBulkUpdate?.productVariants || [];
         console.log(`[Ikarus Sync] Successfully updated ${updatedVariants.length} variants.`);
 
+        const nk = (s) => (s || '').trim().toLowerCase();
+
         const variantMapping = {};
+        const priceMapping = {};
 
         for (const variant of variants) {
           const keyTokens = [];
@@ -277,7 +280,7 @@ export const action = async ({ request }) => {
             if (matchedRow && matchedRow.viewerMenu && matchedRow.items) {
               const matchedItem = matchedRow.items.find((item) => item.shopifyValue === option.value);
               if (matchedItem?.viewerOption?.label) {
-                keyTokens.push(`${matchedRow.viewerMenu}:${matchedItem.viewerOption.label}`);
+                keyTokens.push(`${nk(matchedRow.viewerMenu)}:${nk(matchedItem.viewerOption.label)}`);
               }
             }
           }
@@ -286,7 +289,7 @@ export const action = async ({ request }) => {
           if (variantRow && variantRow.viewerMenu && variantRow.items) {
             const matchedItem = variantRow.items.find((item) => item.shopifyValue === variant.title);
             if (matchedItem?.viewerOption?.label) {
-              keyTokens.push(`${variantRow.viewerMenu}:${matchedItem.viewerOption.label}`);
+              keyTokens.push(`${nk(variantRow.viewerMenu)}:${nk(matchedItem.viewerOption.label)}`);
             }
           }
 
@@ -297,7 +300,14 @@ export const action = async ({ request }) => {
           }
         }
 
+        // priceMapping: variantId → calculated price (exact price Shopify will charge)
+        for (const v of variantsToUpdate) {
+          const cleanId = v.id.split('/').pop();
+          priceMapping[cleanId] = parseFloat(v.price);
+        }
+
         console.log(`[Ikarus Sync] Constructed Variant Mapping:`, variantMapping);
+        console.log(`[Ikarus Sync] Constructed Price Mapping:`, priceMapping);
 
         if (projectId && accessToken && Object.keys(variantMapping).length > 0) {
           try {
@@ -316,6 +326,7 @@ export const action = async ({ request }) => {
                     productId: productId,
                     menuSlots: menuSlots,
                     varientMapping: variantMapping,
+                    priceMapping: priceMapping,
                     isParent: isParent
                   }]
                 }
