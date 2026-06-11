@@ -155,6 +155,8 @@
     '[data-cart-items]',
     'form[action="/cart"] tbody',
     'form[action="/cart"] ul',
+    'form[action*="/cart"] tbody',
+    'form[action*="/cart"] ul',
     'form.cart tbody',
     'form.cart ul',
     '.cart-drawer__products',
@@ -163,6 +165,10 @@
     '.cart-products',
     '.mini-cart__items',
     '.cart-sidebar__items',
+    '[class*="cart-items"]',
+    '[class*="CartItems"]',
+    '[id*="cart-items"]',
+    '[id*="CartItems"]',
   ];
 
   // --- PRIMARY: CSS injection to hide child rows by position ---
@@ -179,6 +185,27 @@
       document.head.appendChild(styleEl);
     }
 
+    // One-shot diagnostic: log which containers are found and what cart-like elements exist
+    if (!applyBundleCSS._diag) {
+      applyBundleCSS._diag = true;
+      var foundContainers = IKARUS_CONTAINERS.filter(function(s) {
+        try { return !!document.querySelector(s); } catch(e) { return false; }
+      });
+      console.log('[Ikarus] DIAG containers matched:', foundContainers.length ? foundContainers : 'NONE');
+      if (!foundContainers.length) {
+        // Scan all elements for cart-like IDs/classes
+        var suspects = [];
+        document.querySelectorAll('*').forEach(function(el) {
+          var id = el.id || '';
+          var cls = typeof el.className === 'string' ? el.className : '';
+          if ((id + ' ' + cls).match(/cart|Cart|basket|bag|line.item/i) && el.children.length > 0) {
+            suspects.push(el.tagName + (id ? '#' + id : '') + ' [' + cls.split(' ').slice(0,2).join('.') + '] children:' + el.children.length);
+          }
+        });
+        console.log('[Ikarus] DIAG cart-like elements on page:', suspects.slice(0, 30));
+      }
+    }
+
     var rules = [];
     Object.keys(cachedBundles).forEach(function(bid) {
       var b = cachedBundles[bid];
@@ -187,13 +214,16 @@
       b.children.forEach(function(child) {
         var n = child._lineIndex; // 1-based
         IKARUS_CONTAINERS.forEach(function(csel) {
-          // Direct child at position N
           rules.push(csel + ' > *:nth-child(' + n + ') { display: none !important; }');
-          // One wrapper deep (e.g. container > ul > li)
           rules.push(csel + ' > * > *:nth-child(' + n + ') { display: none !important; }');
         });
-        // Table row fallback for cart PAGE
-        rules.push('form[action="/cart"] tr:nth-of-type(' + n + ') { display: none !important; }');
+        // Wildcard attribute selectors — catch any container with "cart" in id/class
+        ['[id*="cart"]','[id*="Cart"]','[class*="cart-item"]','[class*="CartItem"]',
+         '[class*="cart__item"]','[class*="line-item"]','[class*="LineItem"]'].forEach(function(ws) {
+          rules.push(ws + ':nth-child(' + n + ') { display: none !important; }');
+        });
+        // Table row fallback
+        rules.push('form[action*="/cart"] tr:nth-of-type(' + n + ') { display: none !important; }');
         rules.push('form.cart tr:nth-of-type(' + n + ') { display: none !important; }');
       });
     });
