@@ -407,8 +407,9 @@
               var indent = '  '.repeat(depth);
               var id = el.id ? '#' + el.id : '';
               var cls = typeof el.className === 'string' && el.className ? '.' + el.className.trim().split(/\s+/).join('.') : '';
-              console.log('[Ikarus] TREE' + indent + ' ' + el.tagName + id + cls + ' [' + el.children.length + ' ch]');
-              if (depth < 4) Array.from(el.children).forEach(function(c) { dumpTree(c, depth + 1); });
+              var leaf = el.children.length === 0 ? ' = "' + (el.innerText || '').trim().substring(0, 80) + '"' : ' [' + el.children.length + ' ch]';
+              console.log('[Ikarus] TREE' + indent + ' ' + el.tagName + id + cls + leaf);
+              if (depth < 7) Array.from(el.children).forEach(function(c) { dumpTree(c, depth + 1); });
             }
             dumpTree(ciw, 0);
           }, 3000);
