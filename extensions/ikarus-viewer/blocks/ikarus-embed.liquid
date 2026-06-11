@@ -182,7 +182,10 @@
     // NOTE: [id*="cart-items"] is intentionally omitted — it matches #custom-cart-items-wrapper
     // (an Ikarus app block wrapper with 1 child div), so > *:nth-child(N) hides the wrapper div
     // instead of an individual cart row. Use '#custom-cart-items-wrapper > div' below instead.
-    '#custom-cart-items-wrapper > div',
+    // Ikarus custom cart block (ikarus_delta_cart_items):
+    // #custom-cart-items-wrapper > #custom-cart-items > .cart-items-container > DIV.cart-line (per item)
+    '.cart-items-container',
+    '#custom-cart-items-wrapper > div > div:first-child',
   ];
 
   // --- PRIMARY: CSS injection to hide child rows by position ---
@@ -226,6 +229,9 @@
         // Dawn cart page: explicit full-path rules (safe regardless of matched list).
         rules.push('table.cart-items > tbody > tr:nth-child(' + n + ') { display: none !important; }');
         rules.push('cart-items table > tbody > tr:nth-child(' + n + ') { display: none !important; }');
+        // Ikarus custom cart block (ikarus_delta_cart_items): explicit full path
+        rules.push('#custom-cart-items > .cart-items-container > *:nth-child(' + n + ') { display: none !important; }');
+        rules.push('.cart-items-container > .cart-line:nth-child(' + n + ') { display: none !important; }');
         // Row-level class wildcards — only safe when cart containers are confirmed present.
         ['[class*="cart-item"]','[class*="CartItem"]',
          '[class*="cart__item"]','[class*="line-item"]','[class*="LineItem"]'].forEach(function(ws) {
