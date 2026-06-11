@@ -342,26 +342,48 @@
 
   function updateParentPrice(b) {
     var parentRow = findParentRow(b.parent);
-    if (!parentRow || parentRow.dataset.ikarusPriceUpdated) return;
+    if (!parentRow) return;
 
     var oldCents = b.parent.final_line_price;
     var newCents = b.totalPrice;
-    if (oldCents === newCents) { parentRow.dataset.ikarusPriceUpdated = 'true'; return; }
+    if (oldCents === newCents) return;
 
     var oldStr = (oldCents / 100).toFixed(2);
     var newStr = (newCents / 100).toFixed(2);
     var oldComma = parseFloat(oldStr).toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2});
     var newComma = parseFloat(newStr).toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2});
 
-    parentRow.querySelectorAll('.price, [class*="price"], [class*="Price"], dd, span').forEach(function(pel) {
+    // Include item-total / line-total classes in addition to price classes.
+    // The Ikarus custom cart block uses div.item-total for the right-column line price.
+    var priceSelector = '.price, [class*="price"], [class*="Price"], .item-total, [class*="item-total"], [class*="line-total"], [class*="line_price"], dd, span';
+    parentRow.querySelectorAll(priceSelector).forEach(function(pel) {
       var text = pel.innerText || '';
       if (text.includes(oldStr)) {
-        pel.innerHTML = pel.innerHTML.replace(new RegExp(oldStr, 'g'), newStr);
+        pel.innerHTML = pel.innerHTML.replace(new RegExp(oldStr.replace(/\./g, '\\.'), 'g'), newStr);
       } else if (oldComma !== oldStr && text.includes(oldComma)) {
         pel.innerHTML = pel.innerHTML.replace(new RegExp(oldComma.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'g'), newComma);
       }
     });
-    parentRow.dataset.ikarusPriceUpdated = 'true';
+  }
+
+  // Combines parent and child variant_title strings into the parent's variant display element.
+  // e.g. "Black / TM Pine / Virta" + "Self Winterized Shower / Thermo Ash / Fibre Optic Starlight Ceiling"
+  // → "Black / TM Pine / Virta / Self Winterized Shower / Thermo Ash / Fibre Optic Starlight Ceiling"
+  function updateBundleVariantDisplay(b) {
+    if (!b.parent || !b.children.length) return;
+    var parentRow = findParentRow(b.parent);
+    if (!parentRow) return;
+
+    var variantEl = parentRow.querySelector('.cart-item-variant, [class*="variant"]');
+    if (!variantEl) return;
+
+    var childTitles = b.children.map(function(c) { return c.variant_title || ''; }).filter(Boolean);
+    if (!childTitles.length) return;
+
+    var parentTitle = b.parent.variant_title || '';
+    var combined = [parentTitle].concat(childTitles).filter(Boolean).join(' / ');
+    if (variantEl.textContent === combined) return; // already correct
+    variantEl.textContent = combined;
   }
 
   function enforceBundleVisuals() {
@@ -369,7 +391,10 @@
     applyBundleCSS(); // re-inject CSS on every tick (idempotent, no network)
     Object.keys(cachedBundles).forEach(function(bid) {
       var b = cachedBundles[bid];
-      if (b.parent && b.children.length) updateParentPrice(b);
+      if (b.parent && b.children.length) {
+        updateParentPrice(b);
+        updateBundleVariantDisplay(b);
+      }
     });
   }
 
