@@ -232,14 +232,15 @@
         // Ikarus custom cart block (ikarus_delta_cart_items): explicit full path
         rules.push('#custom-cart-items > .cart-items-container > *:nth-child(' + n + ') { display: none !important; }');
         rules.push('.cart-items-container > .cart-line:nth-child(' + n + ') { display: none !important; }');
-        // Row-level class wildcards — only safe when cart containers are confirmed present.
-        ['[class*="cart-item"]','[class*="CartItem"]',
-         '[class*="cart__item"]','[class*="line-item"]','[class*="LineItem"]'].forEach(function(ws) {
-          rules.push(ws + ':nth-child(' + n + ') { display: none !important; }');
-        });
-        // Table row fallback
-        rules.push('form[action$="/cart"] tr:nth-of-type(' + n + ') { display: none !important; }');
-        rules.push('form#cart tr:nth-of-type(' + n + ') { display: none !important; }');
+        // NOTE: class-wildcard row selectors like [class*="cart-item"]:nth-child(N) are intentionally
+        // removed. They match elements that are the Nth child of ANY parent (not just cart containers),
+        // e.g. div.cart-item-content is always :nth-child(1) of its parent div.cart-line, so n=1
+        // hides the content div inside EVERY cart-line, not just the first one.
+        // Use scoped container rules above instead.
+        //
+        // Table row fallback for Dawn-style themes (tr inside tbody, scoped to cart form)
+        rules.push('form[action$="/cart"] tbody tr:nth-of-type(' + n + ') { display: none !important; }');
+        rules.push('form#cart tbody tr:nth-of-type(' + n + ') { display: none !important; }');
       });
     });
 
