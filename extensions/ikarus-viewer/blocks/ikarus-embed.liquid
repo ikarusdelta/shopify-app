@@ -385,6 +385,27 @@
         cachedBundles = bundles;
         applyBundleCSS();      // inject CSS immediately
         enforceBundleVisuals(); // then try price update
+
+        // One-shot delayed dump: fires 3s after bundles load to inspect the async-rendered
+        // Ikarus cart block DOM. Needed because grandchildren count = 0 at initial DIAG time.
+        var hasBundleChildren = Object.keys(bundles).some(function(bid) {
+          return bundles[bid].children.length > 0;
+        });
+        if (hasBundleChildren && !fetchCartAndBuildBundles._dumped) {
+          fetchCartAndBuildBundles._dumped = true;
+          setTimeout(function() {
+            var ciw = document.querySelector('#custom-cart-items-wrapper');
+            if (!ciw) { console.log('[Ikarus] DELAYED — #custom-cart-items-wrapper not found'); return; }
+            function dumpTree(el, depth) {
+              var indent = '  '.repeat(depth);
+              var id = el.id ? '#' + el.id : '';
+              var cls = typeof el.className === 'string' && el.className ? '.' + el.className.trim().split(/\s+/).join('.') : '';
+              console.log('[Ikarus] TREE' + indent + ' ' + el.tagName + id + cls + ' [' + el.children.length + ' ch]');
+              if (depth < 4) Array.from(el.children).forEach(function(c) { dumpTree(c, depth + 1); });
+            }
+            dumpTree(ciw, 0);
+          }, 3000);
+        }
       })
       .catch(function(e) { console.error('[Ikarus] Error fetching cart', e); });
   }
