@@ -1,17 +1,13 @@
 <script>
   window.addEventListener('message', function(event) {
     if (!event.data || event.data.type !== 'IKARUS_SHOPIFY_ADD_TO_CART') return;
-    console.log('[Ikarus App Embed] ✅ Got message:', event.data);
 
     // Grab all variant IDs sent from React
     const variantIds = Array.isArray(event.data.variantIds) && event.data.variantIds.length > 0
       ? event.data.variantIds
       : [event.data.variantId].filter(Boolean);
 
-    if (variantIds.length === 0) {
-      console.warn('[Ikarus] ⚠️ No variant IDs found in payload.');
-      return;
-    }
+    if (variantIds.length === 0) return;
 
     const bundleId = 'bundle_' + Date.now() + '_' + Math.random().toString(36).substr(2, 9);
     const isBundle = variantIds.length > 1;
@@ -52,12 +48,8 @@
       };
     });
 
-    console.log('[Ikarus] Adding items to Shopify cart:', items);
-
     // --- Cart open / count refresh helper ---
     function finishCartAdd(addedItems) {
-      console.log('[Ikarus] ✅ All done. Added items:', addedItems);
-
       const iframe = document.querySelector('iframe[id^="ikd-iframe-"]');
       if (iframe && iframe.contentWindow) {
         iframe.contentWindow.postMessage({ type: 'IKARUS_CART_SUCCESS', items: addedItems }, '*');
@@ -100,16 +92,10 @@
       })
       .then(function(r) { return r.json().then(function(res) { return { ok: r.ok, data: res }; }); })
       .then(function(result) {
-        if (result.ok) {
-          console.log('[Ikarus] ✅ Sequential add succeeded:', result.data);
-          added.push(result.data);
-        } else {
-          console.error('[Ikarus] ❌ Sequential add failed for variant', item.id, result.data);
-        }
+        if (result.ok) added.push(result.data);
         addSequentially(queue, added);
       })
-      .catch(function(err) {
-        console.error('[Ikarus] Sequential add failed for variant', item.id, err);
+      .catch(function() {
         addSequentially(queue, added); // continue even on error
       });
     }
@@ -122,25 +108,18 @@
     })
     .then(function(r) {
       if (r.ok) return r.json().then(function(result) { return { ok: true, result: result }; });
-      // Read Shopify's error body so we can log it before falling back
       return r.json().then(function(errBody) { return { ok: false, status: r.status, errBody: errBody }; })
                .catch(function() { return { ok: false, status: r.status, errBody: null }; });
     })
     .then(function(data) {
       if (data.ok) {
-        // Bulk add worked
         var addedItems = data.result.items || [data.result];
-        console.log('[Ikarus] ✅ Bulk add succeeded:', addedItems);
         finishCartAdd(addedItems);
       } else {
-        // Log what Shopify said and fall back to sequential
-        console.warn('[Ikarus] ⚠️ Bulk add returned', data.status, '– Shopify said:', data.errBody);
-        console.warn('[Ikarus] Falling back to sequential single-item adds...');
         addSequentially(items.slice(), []);
       }
     })
-    .catch(function(err) {
-      console.error('[Ikarus] Network error on bulk add, falling back:', err);
+    .catch(function() {
       addSequentially(items.slice(), []);
     });
   });
@@ -258,42 +237,6 @@
     });
 
     styleEl.innerHTML = rules.join('\n');
-
-    var positions = Object.values(cachedBundles).flatMap(function(b) {
-      return b.children.map(function(c) { return c._lineIndex; });
-    });
-    console.log('[Ikarus] Bundle CSS injected — matched containers:', matched, '— hiding positions:', positions);
-
-    // One-shot diagnostic per page load: fires the first time we inject CSS with children to hide.
-    // At this point matched is already computed and guaranteed non-empty (we returned early otherwise).
-    if (positions.length > 0 && !applyBundleCSS._diag) {
-      applyBundleCSS._diag = true;
-      var suspects = [];
-      document.querySelectorAll('[id*="cart"],[id*="Cart"],[class*="cart"],[class*="Cart"],[id*="basket"],[class*="basket"]').forEach(function(el) {
-        if (el.children.length > 0) {
-          suspects.push({
-            selector: el.tagName + (el.id ? '#' + el.id : '') + (typeof el.className === 'string' && el.className ? '.' + el.className.trim().split(/\s+/).join('.') : ''),
-            children: el.children.length,
-            firstChildTag: el.children[0] ? el.children[0].tagName : '-',
-            firstChildClass: el.children[0] ? (el.children[0].className || '') : '-',
-          });
-        }
-      });
-      console.log('[Ikarus] DIAG — containers used:', matched);
-      console.log('[Ikarus] DIAG — all cart-like elements with children:', suspects);
-      // Extra: inspect #custom-cart-items-wrapper depth so we know if we need to go deeper
-      var ciw = document.querySelector('#custom-cart-items-wrapper');
-      if (ciw) {
-        var inner = ciw.children[0];
-        console.log('[Ikarus] DIAG — #custom-cart-items-wrapper direct child:', inner ? inner.tagName + '.' + (inner.className || '') : 'none', '| grandchildren count:', inner ? inner.children.length : 0);
-        if (inner && inner.children.length) {
-          var gcInfo = Array.from(inner.children).map(function(c, i) {
-            return i + ': ' + c.tagName + (c.id ? '#' + c.id : '') + (c.className ? '.' + c.className.trim().split(/\s+/).join('.') : '');
-          });
-          console.log('[Ikarus] DIAG — grandchildren:', gcInfo);
-        }
-      }
-    }
   }
 
   // --- SECONDARY: DOM manipulation to update parent price ---
@@ -436,30 +379,8 @@
         cachedCartItemCount = cart.item_count;
         applyBundleCSS();      // inject CSS immediately
         enforceBundleVisuals(); // then try price/variant/count update
-
-        // One-shot delayed dump: fires 3s after bundles load to inspect the async-rendered
-        // Ikarus cart block DOM. Needed because grandchildren count = 0 at initial DIAG time.
-        var hasBundleChildren = Object.keys(bundles).some(function(bid) {
-          return bundles[bid].children.length > 0;
-        });
-        if (hasBundleChildren && !fetchCartAndBuildBundles._dumped) {
-          fetchCartAndBuildBundles._dumped = true;
-          setTimeout(function() {
-            var ciw = document.querySelector('#custom-cart-items-wrapper');
-            if (!ciw) { console.log('[Ikarus] DELAYED — #custom-cart-items-wrapper not found'); return; }
-            function dumpTree(el, depth) {
-              var indent = '  '.repeat(depth);
-              var id = el.id ? '#' + el.id : '';
-              var cls = typeof el.className === 'string' && el.className ? '.' + el.className.trim().split(/\s+/).join('.') : '';
-              var leaf = el.children.length === 0 ? ' = "' + (el.innerText || '').trim().substring(0, 80) + '"' : ' [' + el.children.length + ' ch]';
-              console.log('[Ikarus] TREE' + indent + ' ' + el.tagName + id + cls + leaf);
-              if (depth < 7) Array.from(el.children).forEach(function(c) { dumpTree(c, depth + 1); });
-            }
-            dumpTree(ciw, 0);
-          }, 3000);
-        }
       })
-      .catch(function(e) { console.error('[Ikarus] Error fetching cart', e); });
+      .catch(function() {});
   }
 
   // Intercept Remove button clicks on bundle PARENT rows.
@@ -501,10 +422,7 @@
       body: JSON.stringify({ updates: updates })
     })
     .then(function() { window.location.reload(); })
-    .catch(function(e) {
-      console.error('[Ikarus] Bundle remove failed:', e);
-      window.location.reload();
-    });
+    .catch(function() { window.location.reload(); });
   }, true /* capture phase */);
 
   document.addEventListener('DOMContentLoaded', fetchCartAndBuildBundles);
