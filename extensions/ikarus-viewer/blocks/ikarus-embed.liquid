@@ -147,16 +147,27 @@
 
   // All cart containers we try (nth-child CSS and position-based JS both use this list).
   var IKARUS_CONTAINERS = [
+    // Dawn cart page: table.cart-items > tbody > tr.cart-item#CartItem-N
+    'table.cart-items tbody',
+    'cart-items form tbody',
+    'cart-items table tbody',
+    // Standard form-based
+    'form[action="/cart"] tbody',
+    'form[action$="/cart"] tbody',      // catches /en/cart locale prefixes
+    'form[action="/cart"] ul',
+    'form[action$="/cart"] ul',
+    'form#cart tbody',
+    'form#cart ul',
+    // Named containers
     '#CartItems',
     '#CartDrawer-CartItems',
-    '.cart-items',
+    // NOTE: '.cart-items' intentionally excluded — in Dawn it matches table.cart-items
+    // (the TABLE itself), so > *:nth-child(N) targets <tbody> not a cart row.
+    // Use 'table.cart-items tbody' (above) for Dawn.
     'cart-items',
     '.cart__items',
     '[data-cart-items]',
-    'form[action="/cart"] tbody',
-    'form[action="/cart"] ul',
-    'form[action*="/cart"] tbody',
-    'form[action*="/cart"] ul',
+    // Other themes
     'form.cart tbody',
     'form.cart ul',
     '.cart-drawer__products',
@@ -165,8 +176,9 @@
     '.cart-products',
     '.mini-cart__items',
     '.cart-sidebar__items',
-    '[class*="cart-items"]',
-    '[class*="CartItems"]',
+    // NOTE: [class*="cart-items"] is intentionally omitted — it can match table.cart-items
+    // (the TABLE element), making > *:nth-child(N) target <tbody> instead of a cart row.
+    // Use 'table.cart-items tbody' above for Dawn.
     '[id*="cart-items"]',
     '[id*="CartItems"]',
   ];
@@ -194,16 +206,19 @@
         var n = child._lineIndex; // 1-based
         IKARUS_CONTAINERS.forEach(function(csel) {
           rules.push(csel + ' > *:nth-child(' + n + ') { display: none !important; }');
-          rules.push(csel + ' > * > *:nth-child(' + n + ') { display: none !important; }');
         });
-        // Wildcard attribute selectors — catch any container with "cart" in id/class
-        ['[id*="cart"]','[id*="Cart"]','[class*="cart-item"]','[class*="CartItem"]',
+        // Dawn cart page: table.cart-items > tbody > tr.cart-item (explicit, safe)
+        rules.push('table.cart-items > tbody > tr:nth-child(' + n + ') { display: none !important; }');
+        rules.push('cart-items table > tbody > tr:nth-child(' + n + ') { display: none !important; }');
+        // Row-level selectors: target ROWS that have "cart-item" in their class/id (NOT containers)
+        // These are safe because tr.cart-item elements are DIRECT children of tbody, not notification wrappers.
+        ['[class*="cart-item"]','[class*="CartItem"]',
          '[class*="cart__item"]','[class*="line-item"]','[class*="LineItem"]'].forEach(function(ws) {
           rules.push(ws + ':nth-child(' + n + ') { display: none !important; }');
         });
         // Table row fallback
-        rules.push('form[action*="/cart"] tr:nth-of-type(' + n + ') { display: none !important; }');
-        rules.push('form.cart tr:nth-of-type(' + n + ') { display: none !important; }');
+        rules.push('form[action$="/cart"] tr:nth-of-type(' + n + ') { display: none !important; }');
+        rules.push('form#cart tr:nth-of-type(' + n + ') { display: none !important; }');
       });
     });
 
