@@ -133,6 +133,7 @@ export const action = async ({ request }) => {
         const updatedVariants = data.data?.productVariantsBulkUpdate?.productVariants || [];
 
         // Build Multi-Product Token Maps
+        const normalizeLabel = (s) => s.trim().toLowerCase().replace(/\s+/g, ' ');
         const variantMapping = {};
         const menuSlotsSet = new Set();
 
@@ -144,7 +145,7 @@ export const action = async ({ request }) => {
               menuSlotsSet.add(matchedRow.viewerMenu);
               const matchedItem = matchedRow.items.find((item) => item.shopifyValue === option.value);
               if (matchedItem?.viewerOption?.label) {
-                keyTokens.push(`${matchedRow.viewerMenu}:${matchedItem.viewerOption.label}`);
+                keyTokens.push(`${normalizeLabel(matchedRow.viewerMenu)}:${normalizeLabel(matchedItem.viewerOption.label)}`);
               }
             }
           }
@@ -153,7 +154,7 @@ export const action = async ({ request }) => {
             menuSlotsSet.add(variantRow.viewerMenu);
             const matchedItem = variantRow.items.find((item) => item.shopifyValue === variant.title);
             if (matchedItem?.viewerOption?.label) {
-              keyTokens.push(`${variantRow.viewerMenu}:${matchedItem.viewerOption.label}`);
+              keyTokens.push(`${normalizeLabel(variantRow.viewerMenu)}:${normalizeLabel(matchedItem.viewerOption.label)}`);
             }
           }
           if (keyTokens.length > 0) {
