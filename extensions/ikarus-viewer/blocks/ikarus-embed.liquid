@@ -184,13 +184,26 @@
   ];
 
   // --- PRIMARY: CSS injection to hide child rows by position ---
-  // Works without knowing the theme's class/ID naming — uses :nth-child.
-  // cart.js returns items in the same order Liquid renders them, so
-  // the Nth direct child of the cart container IS the Nth cart item.
+  // Only runs when cart item containers are actually present in the DOM.
+  // On pages that only have a cart-notification popup (no drawer, no /cart table),
+  // matched will be empty and we skip — preventing rules from accidentally hiding
+  // notification elements.
   function applyBundleCSS() {
     if (!cachedBundles) return;
 
+    // Check which containers exist right now.
+    var matched = IKARUS_CONTAINERS.filter(function(s) {
+      try { return !!document.querySelector(s); } catch(e) { return false; }
+    });
+
     var styleEl = document.getElementById('ikarus-bundle-css');
+
+    if (!matched.length) {
+      // No cart item containers on this page — clear any stale CSS and bail.
+      if (styleEl) styleEl.innerHTML = '';
+      return;
+    }
+
     if (!styleEl) {
       styleEl = document.createElement('style');
       styleEl.id = 'ikarus-bundle-css';
@@ -204,14 +217,14 @@
 
       b.children.forEach(function(child) {
         var n = child._lineIndex; // 1-based
-        IKARUS_CONTAINERS.forEach(function(csel) {
+        // Only generate rules for containers that actually exist on this page.
+        matched.forEach(function(csel) {
           rules.push(csel + ' > *:nth-child(' + n + ') { display: none !important; }');
         });
-        // Dawn cart page: table.cart-items > tbody > tr.cart-item (explicit, safe)
+        // Dawn cart page: explicit full-path rules (safe regardless of matched list).
         rules.push('table.cart-items > tbody > tr:nth-child(' + n + ') { display: none !important; }');
         rules.push('cart-items table > tbody > tr:nth-child(' + n + ') { display: none !important; }');
-        // Row-level selectors: target ROWS that have "cart-item" in their class/id (NOT containers)
-        // These are safe because tr.cart-item elements are DIRECT children of tbody, not notification wrappers.
+        // Row-level class wildcards — only safe when cart containers are confirmed present.
         ['[class*="cart-item"]','[class*="CartItem"]',
          '[class*="cart__item"]','[class*="line-item"]','[class*="LineItem"]'].forEach(function(ws) {
           rules.push(ws + ':nth-child(' + n + ') { display: none !important; }');
@@ -227,17 +240,12 @@
     var positions = Object.values(cachedBundles).flatMap(function(b) {
       return b.children.map(function(c) { return c._lineIndex; });
     });
-    console.log('[Ikarus] Bundle CSS injected — hiding child at positions:', positions);
+    console.log('[Ikarus] Bundle CSS injected — matched containers:', matched, '— hiding positions:', positions);
 
-    // Diagnostic: fires once when we actually have children to hide.
-    // Tells us which containers matched and what cart-like elements exist RIGHT NOW.
+    // One-shot diagnostic per page load: fires the first time we inject CSS with children to hide.
+    // At this point matched is already computed and guaranteed non-empty (we returned early otherwise).
     if (positions.length > 0 && !applyBundleCSS._diag) {
       applyBundleCSS._diag = true;
-      var matched = IKARUS_CONTAINERS.filter(function(s) {
-        try { return !!document.querySelector(s); } catch(e) { return false; }
-      });
-      console.log('[Ikarus] DIAG — containers matched on this page:', matched.length ? matched : 'NONE — add the correct one below');
-      // Always dump cart-like elements so we can pinpoint the exact selector
       var suspects = [];
       document.querySelectorAll('[id*="cart"],[id*="Cart"],[class*="cart"],[class*="Cart"],[id*="basket"],[class*="basket"]').forEach(function(el) {
         if (el.children.length > 0) {
@@ -249,7 +257,8 @@
           });
         }
       });
-      console.log('[Ikarus] DIAG — cart-like elements with children:', suspects);
+      console.log('[Ikarus] DIAG — containers used:', matched);
+      console.log('[Ikarus] DIAG — all cart-like elements with children:', suspects);
     }
   }
 
