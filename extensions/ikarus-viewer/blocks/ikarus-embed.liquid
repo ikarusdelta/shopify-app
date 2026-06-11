@@ -142,51 +142,11 @@
     });
   });
 
-  // --- Auto-Hide Bundle Children ---
+  // --- Bundle Child Hiding & Parent Price Update ---
   var cachedBundles = null;
 
-  // 1. Fetch cart mapping from Shopify API
-  function fetchCartAndBuildBundles() {
-    fetch('/cart.js')
-      .then(function(r) { return r.json(); })
-      .then(function(cart) {
-        var bundles = {};
-        cart.items.forEach(function(item, index) {
-          // Store 1-based line index so enforceBundleVisuals can target CartItem-N
-          item._lineIndex = index + 1;
-
-          if (item.properties && item.properties._bundle_id) {
-            var bid = item.properties._bundle_id;
-            if (!bundles[bid]) bundles[bid] = { parent: null, children: [], totalPrice: 0, totalOriginalPrice: 0 };
-
-            if (item.properties._is_bundle_parent === 'true') {
-              bundles[bid].parent = item;
-            } else if (item.properties._is_bundle_child === 'true') {
-              bundles[bid].children.push(item);
-            }
-            bundles[bid].totalPrice += item.final_line_price;
-            bundles[bid].totalOriginalPrice += item.original_line_price;
-          }
-        });
-        cachedBundles = bundles;
-        enforceBundleVisuals();
-      })
-      .catch(function(e) { console.error('[Ikarus] Error fetching cart', e); });
-  }
-
-  // Ordered list of selectors that identify individual cart item rows.
-  var ITEM_ROW_SELS = [
-    'tr.cart-item', 'li.cart-item', 'article.cart-item',
-    '[class*="CartItem__"]',                  // CartItem__Root etc.
-    '.cart__row', '.cart__item',
-    '.cart-line-item', '.cart-product',
-    '[data-cart-item]',
-    'tr[id^="CartItem-"]', 'tr[id^="cart-item-"]',
-    'tr',                                     // plain table rows as last tr fallback
-  ];
-
-  // Containers that hold ONLY cart item rows (no noise from other page sections).
-  var CART_CONTAINER_SELS = [
+  // All cart containers we try (nth-child CSS and position-based JS both use this list).
+  var IKARUS_CONTAINERS = [
     '#CartItems',
     '#CartDrawer-CartItems',
     '.cart-items',
@@ -197,190 +157,175 @@
     'form[action="/cart"] ul',
     'form.cart tbody',
     'form.cart ul',
+    '.cart-drawer__products',
+    '.cart-drawer-items',
+    '.cart-list',
+    '.cart-products',
+    '.mini-cart__items',
+    '.cart-sidebar__items',
   ];
 
-  // Find the DOM row for a cart item using multiple strategies.
-  function findCartItemRow(item) {
-    var lineIndex = item._lineIndex;   // 1-based position in cart.js order
-    var keyStr = item.key || '';
-    var keyEnc = encodeURIComponent(keyStr);
-    var vidStr = item.variant_id ? item.variant_id.toString() : '';
-    var ROW_CLOSEST = ITEM_ROW_SELS.slice(0, -1).join(', '); // for .closest()
+  // --- PRIMARY: CSS injection to hide child rows by position ---
+  // Works without knowing the theme's class/ID naming — uses :nth-child.
+  // cart.js returns items in the same order Liquid renders them, so
+  // the Nth direct child of the cart container IS the Nth cart item.
+  function applyBundleCSS() {
+    if (!cachedBundles) return;
 
-    // Strategy 1: CartItem-N / CartDrawer-Item-N (Dawn and Dawn-based themes)
-    if (lineIndex) {
-      var byId = document.getElementById('CartItem-' + lineIndex)
-        || document.getElementById('CartDrawer-Item-' + lineIndex)
-        || document.getElementById('cart-item-' + lineIndex);
-      if (byId) return byId;
+    var styleEl = document.getElementById('ikarus-bundle-css');
+    if (!styleEl) {
+      styleEl = document.createElement('style');
+      styleEl.id = 'ikarus-bundle-css';
+      document.head.appendChild(styleEl);
     }
 
-    // Strategy 2: data-key attribute (some modern themes)
-    if (keyStr) {
-      var byKey = document.querySelector('[data-key="' + keyStr + '"]');
-      if (byKey) return byKey.closest(ROW_CLOSEST) || byKey;
-    }
+    var rules = [];
+    Object.keys(cachedBundles).forEach(function(bid) {
+      var b = cachedBundles[bid];
+      if (!b.parent || !b.children.length) return;
 
-    // Strategy 3: data-variant-id / data-product-variant-id attribute
-    if (vidStr) {
-      var byVid = document.querySelector(
-        '[data-variant-id="' + vidStr + '"], [data-product-variant-id="' + vidStr + '"]'
-      );
-      if (byVid) return byVid.closest(ROW_CLOSEST) || byVid;
-    }
-
-    // Strategy 4: links or elements whose href/id contains the cart key or variant ID
-    var attrSel = [];
-    if (keyStr) attrSel.push('a[href*="' + keyStr + '"]', 'a[href*="' + keyEnc + '"]', '[id*="' + keyStr + '"]');
-    if (vidStr) attrSel.push('a[href*="' + vidStr + '"]');
-    if (attrSel.length) {
-      var attrEls = document.querySelectorAll(attrSel.join(', '));
-      for (var i = 0; i < attrEls.length; i++) {
-        var r4 = attrEls[i].closest(ROW_CLOSEST);
-        if (r4) return r4;
-      }
-    }
-
-    // Strategy 5: hidden inputs whose value is the variant ID
-    if (vidStr) {
-      var inputs = document.querySelectorAll('input[value="' + vidStr + '"]');
-      for (var j = 0; j < inputs.length; j++) {
-        var r5 = inputs[j].closest(ROW_CLOSEST);
-        if (r5) return r5;
-      }
-    }
-
-    // Strategy 6: Position-based inside each cart container.
-    // cart.js item order matches the Liquid render order, so the Nth child = Nth cart item.
-    // We try specific row selectors first, then fall back to raw direct/2nd-level children.
-    if (lineIndex) {
-      var containers6 = document.querySelectorAll(CART_CONTAINER_SELS.join(', '));
-      for (var c = 0; c < containers6.length; c++) {
-        var cont = containers6[c];
-
-        // 6a: specific row selectors inside this container
-        for (var s = 0; s < ITEM_ROW_SELS.length; s++) {
-          var rows = cont.querySelectorAll(ITEM_ROW_SELS[s]);
-          if (rows.length >= lineIndex) return rows[lineIndex - 1];
-        }
-
-        // 6b: direct children (any tag) — covers themes with no standard class names
-        var kids = Array.from(cont.children).filter(function(el) {
-          var t2 = el.tagName;
-          return t2 !== 'THEAD' && t2 !== 'TFOOT' && t2 !== 'SCRIPT' && t2 !== 'STYLE';
+      b.children.forEach(function(child) {
+        var n = child._lineIndex; // 1-based
+        IKARUS_CONTAINERS.forEach(function(csel) {
+          // Direct child at position N
+          rules.push(csel + ' > *:nth-child(' + n + ') { display: none !important; }');
+          // One wrapper deep (e.g. container > ul > li)
+          rules.push(csel + ' > * > *:nth-child(' + n + ') { display: none !important; }');
         });
-        if (kids.length >= lineIndex) return kids[lineIndex - 1];
+        // Table row fallback for cart PAGE
+        rules.push('form[action="/cart"] tr:nth-of-type(' + n + ') { display: none !important; }');
+        rules.push('form.cart tr:nth-of-type(' + n + ') { display: none !important; }');
+      });
+    });
 
-        // 6c: grandchildren (container > wrapper > item, e.g. div > ul > li)
-        for (var k = 0; k < kids.length; k++) {
-          var grandkids = Array.from(kids[k].children).filter(function(el) {
-            var t3 = el.tagName;
-            return t3 !== 'THEAD' && t3 !== 'TFOOT' && t3 !== 'SCRIPT' && t3 !== 'STYLE';
-          });
-          if (grandkids.length >= lineIndex) return grandkids[lineIndex - 1];
-        }
-      }
+    styleEl.innerHTML = rules.join('\n');
+    console.log('[Ikarus] Bundle CSS injected — hiding child at positions:',
+      Object.values(cachedBundles).flatMap(function(b) {
+        return b.children.map(function(c) { return c._lineIndex; });
+      })
+    );
+  }
 
-      // 6d: global DOM order — no container found, try any matching element globally
-      for (var s2 = 0; s2 < ITEM_ROW_SELS.length; s2++) {
-        var globalRows = document.querySelectorAll(ITEM_ROW_SELS[s2]);
-        if (globalRows.length >= lineIndex) return globalRows[lineIndex - 1];
+  // --- SECONDARY: DOM manipulation to update parent price ---
+  // Tries multiple ways to locate the parent cart item row, then patches the price text.
+  function findParentRow(parentItem) {
+    var n = parentItem._lineIndex;
+    var vidStr = parentItem.variant_id ? parentItem.variant_id.toString() : '';
+    var keyStr = parentItem.key || '';
+
+    // 1. CartItem-N IDs (Dawn)
+    var byId = document.getElementById('CartItem-' + n)
+      || document.getElementById('CartDrawer-Item-' + n)
+      || document.getElementById('cart-item-' + n);
+    if (byId) return byId;
+
+    // 2. data-key / data-variant-id
+    var byAttr = document.querySelector('[data-key="' + keyStr + '"]')
+      || document.querySelector('[data-variant-id="' + vidStr + '"]');
+    if (byAttr) return byAttr.closest('tr, li, article, [class*="cart-item"], [class*="cart__item"], [class*="CartItem"]') || byAttr;
+
+    // 3. href link containing variant ID or key
+    var linkEl = document.querySelector('a[href*="' + vidStr + '"], a[href*="' + keyStr + '"]');
+    if (linkEl) return linkEl.closest('tr, li, article, [class*="cart-item"], [class*="cart__item"], [class*="CartItem"]') || linkEl;
+
+    // 4. Position-based: Nth child of a known cart container
+    var containers = document.querySelectorAll(IKARUS_CONTAINERS.join(', '));
+    for (var c = 0; c < containers.length; c++) {
+      var cont = containers[c];
+      var kids = Array.from(cont.children).filter(function(el) {
+        var t = el.tagName; return t !== 'THEAD' && t !== 'TFOOT' && t !== 'SCRIPT' && t !== 'STYLE';
+      });
+      if (kids.length >= n) return kids[n - 1];
+      // One level deeper
+      for (var k = 0; k < kids.length; k++) {
+        var gk = Array.from(kids[k].children).filter(function(el) {
+          var t = el.tagName; return t !== 'THEAD' && t !== 'TFOOT' && t !== 'SCRIPT' && t !== 'STYLE';
+        });
+        if (gk.length >= n) return gk[n - 1];
       }
     }
 
-    // Strategy 7 (nuclear): find smallest element in a cart container whose innerHTML
-    // contains the variant ID.  Uses innerHTML scan only as absolute last resort.
+    // 5. innerHTML scan for variant ID (last resort)
     if (vidStr) {
-      var scanRoots7 = document.querySelectorAll(CART_CONTAINER_SELS.join(', ') + ', form[action="/cart"]');
-      if (!scanRoots7.length) scanRoots7 = [document.body];
-      for (var t = 0; t < scanRoots7.length; t++) {
-        var all7 = scanRoots7[t].querySelectorAll('*');
-        var best7 = null;
-        for (var e = 0; e < all7.length; e++) {
-          var el7 = all7[e];
-          if (el7.innerHTML.indexOf(vidStr) === -1) continue;
-          if (!best7 || el7.innerHTML.length < best7.innerHTML.length) best7 = el7;
+      var scanIn = document.querySelectorAll(IKARUS_CONTAINERS.join(', ') + ', form[action="/cart"]');
+      if (!scanIn.length) scanIn = [document.body];
+      for (var t2 = 0; t2 < scanIn.length; t2++) {
+        var all = scanIn[t2].querySelectorAll('*');
+        var best = null;
+        for (var e = 0; e < all.length; e++) {
+          if (all[e].innerHTML.indexOf(vidStr) === -1) continue;
+          if (!best || all[e].innerHTML.length < best.innerHTML.length) best = all[e];
         }
-        if (best7) return best7;
+        if (best) return best;
       }
     }
 
-    // --- Diagnostic (fires once per variant, only when a cart container IS in the DOM) ---
-    if (!findCartItemRow._logged) findCartItemRow._logged = {};
-    var diagKey = vidStr + ':' + lineIndex;
-    if (!findCartItemRow._logged[diagKey]) {
-      findCartItemRow._logged[diagKey] = true;
-      var diag = document.querySelector(CART_CONTAINER_SELS.join(', '));
-      if (diag) {
-        console.group('[Ikarus] ❌ Cart row not found — theme structure needed');
-        console.log('Variant ID:', vidStr, '| Line index:', lineIndex);
-        console.log('Container tag/id/class:', diag.tagName, diag.id, diag.className);
-        console.log('Direct child count:', diag.children.length);
-        if (diag.children[0]) {
-          var fc = diag.children[0];
-          console.log('First child:', fc.tagName, fc.id, fc.className);
-          if (fc.children[0]) {
-            var gc = fc.children[0];
-            console.log('First grandchild:', gc.tagName, gc.id, gc.className);
-          }
-        }
-        console.log('Container outerHTML (first 600 chars):\n', diag.outerHTML.substring(0, 600));
-        console.groupEnd();
-      }
-    }
     return null;
   }
 
-  // 2. Continually enforce DOM changes using cached data (No network requests!)
+  function updateParentPrice(b) {
+    var parentRow = findParentRow(b.parent);
+    if (!parentRow || parentRow.dataset.ikarusPriceUpdated) return;
+
+    var oldCents = b.parent.final_line_price;
+    var newCents = b.totalPrice;
+    if (oldCents === newCents) { parentRow.dataset.ikarusPriceUpdated = 'true'; return; }
+
+    var oldStr = (oldCents / 100).toFixed(2);
+    var newStr = (newCents / 100).toFixed(2);
+    var oldComma = parseFloat(oldStr).toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2});
+    var newComma = parseFloat(newStr).toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2});
+
+    parentRow.querySelectorAll('.price, [class*="price"], [class*="Price"], dd, span').forEach(function(pel) {
+      var text = pel.innerText || '';
+      if (text.includes(oldStr)) {
+        pel.innerHTML = pel.innerHTML.replace(new RegExp(oldStr, 'g'), newStr);
+      } else if (oldComma !== oldStr && text.includes(oldComma)) {
+        pel.innerHTML = pel.innerHTML.replace(new RegExp(oldComma.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'g'), newComma);
+      }
+    });
+    parentRow.dataset.ikarusPriceUpdated = 'true';
+  }
+
   function enforceBundleVisuals() {
     if (!cachedBundles) return;
-    
+    applyBundleCSS(); // re-inject CSS on every tick (idempotent, no network)
     Object.keys(cachedBundles).forEach(function(bid) {
       var b = cachedBundles[bid];
-      if (!b.parent || b.children.length === 0) return;
-
-      // Hide children
-      b.children.forEach(function(child) {
-        var row = findCartItemRow(child);
-        if (row) {
-          row.style.setProperty('display', 'none', 'important');
-        }
-      });
-
-      // Update parent price to show the combined bundle total
-      var parentRow = findCartItemRow(b.parent);
-      if (parentRow && !parentRow.dataset.ikarusPriceUpdated) {
-        var oldCents = b.parent.final_line_price;
-        var newCents = b.totalPrice;
-        if (oldCents !== newCents) {
-          var oldStr = (oldCents / 100).toFixed(2);
-          var newStr = (newCents / 100).toFixed(2);
-          var oldStrComma = parseFloat(oldStr).toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2});
-          var newStrComma = parseFloat(newStr).toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2});
-
-          parentRow.querySelectorAll('.price, .cart-item__price-wrapper, [data-cart-item-price], .cart-item__totals, .cart__price, .cart-item__price, dd, span').forEach(function(pel) {
-            var text = pel.innerText || '';
-            if (text.includes(oldStr)) {
-              pel.innerHTML = pel.innerHTML.replace(new RegExp(oldStr, 'g'), newStr);
-            } else if (oldStrComma !== oldStr && text.includes(oldStrComma)) {
-              pel.innerHTML = pel.innerHTML.replace(new RegExp(oldStrComma.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'g'), newStrComma);
-            }
-          });
-        }
-        parentRow.dataset.ikarusPriceUpdated = 'true';
-      }
+      if (b.parent && b.children.length) updateParentPrice(b);
     });
   }
 
-  // Network triggers
+  function fetchCartAndBuildBundles() {
+    fetch('/cart.js')
+      .then(function(r) { return r.json(); })
+      .then(function(cart) {
+        var bundles = {};
+        cart.items.forEach(function(item, index) {
+          item._lineIndex = index + 1; // 1-based position matching Liquid loop order
+          if (item.properties && item.properties._bundle_id) {
+            var bid = item.properties._bundle_id;
+            if (!bundles[bid]) bundles[bid] = { parent: null, children: [], totalPrice: 0, totalOriginalPrice: 0 };
+            if (item.properties._is_bundle_parent === 'true') bundles[bid].parent = item;
+            else if (item.properties._is_bundle_child === 'true') bundles[bid].children.push(item);
+            bundles[bid].totalPrice += item.final_line_price;
+            bundles[bid].totalOriginalPrice += item.original_line_price;
+          }
+        });
+        cachedBundles = bundles;
+        applyBundleCSS();      // inject CSS immediately
+        enforceBundleVisuals(); // then try price update
+      })
+      .catch(function(e) { console.error('[Ikarus] Error fetching cart', e); });
+  }
+
   document.addEventListener('DOMContentLoaded', fetchCartAndBuildBundles);
   window.addEventListener('message', function(event) {
     if (event.data && event.data.type === 'IKARUS_CART_SUCCESS') {
-       setTimeout(fetchCartAndBuildBundles, 500);
+      setTimeout(fetchCartAndBuildBundles, 500);
     }
   });
 
-  // DOM trigger (Runs 2 times a second, completely safe because it makes 0 network requests)
   setInterval(enforceBundleVisuals, 500);
 </script>
 
