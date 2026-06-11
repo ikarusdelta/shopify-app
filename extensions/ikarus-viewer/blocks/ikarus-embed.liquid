@@ -174,64 +174,122 @@
       .catch(function(e) { console.error('[Ikarus] Error fetching cart', e); });
   }
 
+  // Ordered list of selectors that identify individual cart item rows.
+  var ITEM_ROW_SELS = [
+    'tr.cart-item', 'li.cart-item', 'article.cart-item',
+    '[class*="CartItem__"]',                  // CartItem__Root etc.
+    '.cart__row', '.cart__item',
+    '.cart-line-item', '.cart-product',
+    '[data-cart-item]',
+    'tr[id^="CartItem-"]', 'tr[id^="cart-item-"]',
+    'tr',                                     // plain table rows as last tr fallback
+  ];
+
+  // Containers that hold ONLY cart item rows (no noise from other page sections).
+  var CART_CONTAINER_SELS = [
+    '#CartItems',
+    '#CartDrawer-CartItems',
+    '.cart-items',
+    'cart-items',
+    '.cart__items',
+    '[data-cart-items]',
+    'form[action="/cart"] tbody',
+    'form[action="/cart"] ul',
+    'form.cart tbody',
+    'form.cart ul',
+  ];
+
   // Find the DOM row for a cart item using multiple strategies.
-  // Dawn renders cart rows as <tr id="CartItem-N"> (1-indexed) on both the
-  // cart page and cart drawer, so the _lineIndex lookup is the most reliable.
   function findCartItemRow(item) {
-    var lineIndex = item._lineIndex;
+    var lineIndex = item._lineIndex;   // 1-based position in cart.js order
     var keyStr = item.key || '';
     var keyEnc = encodeURIComponent(keyStr);
     var vidStr = item.variant_id ? item.variant_id.toString() : '';
-    var ROW_SELECTORS = 'tr, li, article, .cart-item, .cart__row, .cart__item, .cart-line-item, [data-cart-item], .CartItem, .cart-product';
+    var ROW_CLOSEST = ITEM_ROW_SELS.slice(0, -1).join(', '); // for .closest()
 
     // Strategy 1: CartItem-N / CartDrawer-Item-N (Dawn and Dawn-based themes)
     if (lineIndex) {
-      var byIndex = document.getElementById('CartItem-' + lineIndex)
+      var byId = document.getElementById('CartItem-' + lineIndex)
         || document.getElementById('CartDrawer-Item-' + lineIndex)
         || document.getElementById('cart-item-' + lineIndex);
-      if (byIndex) return byIndex;
+      if (byId) return byId;
     }
 
-    // Strategy 2: data-key attribute (some Dawn versions, other modern themes)
+    // Strategy 2: data-key attribute (some modern themes)
     if (keyStr) {
       var byKey = document.querySelector('[data-key="' + keyStr + '"]');
-      if (byKey) {
-        var r = byKey.closest(ROW_SELECTORS);
-        return r || byKey;
-      }
+      if (byKey) return byKey.closest(ROW_CLOSEST) || byKey;
     }
 
-    // Strategy 3: data-variant-id attribute
+    // Strategy 3: data-variant-id / data-product-variant-id attribute
     if (vidStr) {
-      var byVid = document.querySelector('[data-variant-id="' + vidStr + '"], [data-product-variant-id="' + vidStr + '"]');
-      if (byVid) {
-        var r2 = byVid.closest(ROW_SELECTORS);
-        return r2 || byVid;
-      }
+      var byVid = document.querySelector(
+        '[data-variant-id="' + vidStr + '"], [data-product-variant-id="' + vidStr + '"]'
+      );
+      if (byVid) return byVid.closest(ROW_CLOSEST) || byVid;
     }
 
-    // Strategy 4: links whose href contains the cart key or variant ID
-    var linkSel = [];
-    if (keyStr) linkSel.push('a[href*="' + keyStr + '"]', 'a[href*="' + keyEnc + '"]', '[id*="' + keyStr + '"]');
-    if (vidStr) linkSel.push('a[href*="' + vidStr + '"]');
-    if (linkSel.length) {
-      var els = document.querySelectorAll(linkSel.join(', '));
-      for (var i = 0; i < els.length; i++) {
-        var r3 = els[i].closest(ROW_SELECTORS);
-        if (r3) return r3;
-      }
-    }
-
-    // Strategy 5: hidden inputs whose value is the variant ID (older themes)
-    if (vidStr) {
-      var inputs = document.querySelectorAll('input[value="' + vidStr + '"]');
-      for (var j = 0; j < inputs.length; j++) {
-        var r4 = inputs[j].closest(ROW_SELECTORS);
+    // Strategy 4: links or elements whose href/id contains the cart key or variant ID
+    var attrSel = [];
+    if (keyStr) attrSel.push('a[href*="' + keyStr + '"]', 'a[href*="' + keyEnc + '"]', '[id*="' + keyStr + '"]');
+    if (vidStr) attrSel.push('a[href*="' + vidStr + '"]');
+    if (attrSel.length) {
+      var attrEls = document.querySelectorAll(attrSel.join(', '));
+      for (var i = 0; i < attrEls.length; i++) {
+        var r4 = attrEls[i].closest(ROW_CLOSEST);
         if (r4) return r4;
       }
     }
 
-    console.log('[Ikarus] ⚠️ Could not find cart row for variant', vidStr, '(line', lineIndex + ')');
+    // Strategy 5: hidden inputs whose value is the variant ID
+    if (vidStr) {
+      var inputs = document.querySelectorAll('input[value="' + vidStr + '"]');
+      for (var j = 0; j < inputs.length; j++) {
+        var r5 = inputs[j].closest(ROW_CLOSEST);
+        if (r5) return r5;
+      }
+    }
+
+    // Strategy 6: Nth item inside a cart container (position-based, theme-agnostic).
+    // cart.js returns items in the same order the Liquid template renders them,
+    // so the Nth child of the cart container matches lineIndex.
+    if (lineIndex) {
+      for (var c = 0; c < CART_CONTAINER_SELS.length; c++) {
+        var container = document.querySelector(CART_CONTAINER_SELS[c]);
+        if (!container) continue;
+        for (var s = 0; s < ITEM_ROW_SELS.length; s++) {
+          var rows = container.querySelectorAll(ITEM_ROW_SELS[s]);
+          if (rows.length >= lineIndex) return rows[lineIndex - 1];
+        }
+      }
+      // No container found — search globally in DOM order.
+      for (var s2 = 0; s2 < ITEM_ROW_SELS.length; s2++) {
+        var globalRows = document.querySelectorAll(ITEM_ROW_SELS[s2]);
+        if (globalRows.length >= lineIndex) return globalRows[lineIndex - 1];
+      }
+    }
+
+    // Strategy 7 (nuclear): scan any plausible cart row whose innerHTML contains
+    // the variant ID string. Scoped to container elements to avoid false positives.
+    if (vidStr) {
+      var scanTargets = document.querySelectorAll(
+        CART_CONTAINER_SELS.join(', ') + ', form[action="/cart"]'
+      );
+      // Fall back to full document if no container found
+      var scanRoots = scanTargets.length ? scanTargets : [document.body];
+      for (var t = 0; t < scanRoots.length; t++) {
+        var direct = scanRoots[t].children;
+        for (var d = 0; d < direct.length; d++) {
+          if (direct[d].innerHTML.indexOf(vidStr) !== -1) return direct[d];
+        }
+      }
+    }
+
+    // Only log when cart elements actually exist on the page (suppress noise on product pages).
+    var cartVisible = document.querySelector(CART_CONTAINER_SELS.join(', '));
+    if (cartVisible) {
+      console.warn('[Ikarus] ⚠️ Could not find cart row for variant', vidStr, '(line', lineIndex, '). Theme HTML:', cartVisible.innerHTML.substring(0, 300));
+    }
     return null;
   }
 
