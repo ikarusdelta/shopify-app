@@ -250,45 +250,83 @@
       }
     }
 
-    // Strategy 6: Nth item inside a cart container (position-based, theme-agnostic).
-    // cart.js returns items in the same order the Liquid template renders them,
-    // so the Nth child of the cart container matches lineIndex.
+    // Strategy 6: Position-based inside each cart container.
+    // cart.js item order matches the Liquid render order, so the Nth child = Nth cart item.
+    // We try specific row selectors first, then fall back to raw direct/2nd-level children.
     if (lineIndex) {
-      for (var c = 0; c < CART_CONTAINER_SELS.length; c++) {
-        var container = document.querySelector(CART_CONTAINER_SELS[c]);
-        if (!container) continue;
+      var containers6 = document.querySelectorAll(CART_CONTAINER_SELS.join(', '));
+      for (var c = 0; c < containers6.length; c++) {
+        var cont = containers6[c];
+
+        // 6a: specific row selectors inside this container
         for (var s = 0; s < ITEM_ROW_SELS.length; s++) {
-          var rows = container.querySelectorAll(ITEM_ROW_SELS[s]);
+          var rows = cont.querySelectorAll(ITEM_ROW_SELS[s]);
           if (rows.length >= lineIndex) return rows[lineIndex - 1];
         }
+
+        // 6b: direct children (any tag) — covers themes with no standard class names
+        var kids = Array.from(cont.children).filter(function(el) {
+          var t2 = el.tagName;
+          return t2 !== 'THEAD' && t2 !== 'TFOOT' && t2 !== 'SCRIPT' && t2 !== 'STYLE';
+        });
+        if (kids.length >= lineIndex) return kids[lineIndex - 1];
+
+        // 6c: grandchildren (container > wrapper > item, e.g. div > ul > li)
+        for (var k = 0; k < kids.length; k++) {
+          var grandkids = Array.from(kids[k].children).filter(function(el) {
+            var t3 = el.tagName;
+            return t3 !== 'THEAD' && t3 !== 'TFOOT' && t3 !== 'SCRIPT' && t3 !== 'STYLE';
+          });
+          if (grandkids.length >= lineIndex) return grandkids[lineIndex - 1];
+        }
       }
-      // No container found — search globally in DOM order.
+
+      // 6d: global DOM order — no container found, try any matching element globally
       for (var s2 = 0; s2 < ITEM_ROW_SELS.length; s2++) {
         var globalRows = document.querySelectorAll(ITEM_ROW_SELS[s2]);
         if (globalRows.length >= lineIndex) return globalRows[lineIndex - 1];
       }
     }
 
-    // Strategy 7 (nuclear): scan any plausible cart row whose innerHTML contains
-    // the variant ID string. Scoped to container elements to avoid false positives.
+    // Strategy 7 (nuclear): find smallest element in a cart container whose innerHTML
+    // contains the variant ID.  Uses innerHTML scan only as absolute last resort.
     if (vidStr) {
-      var scanTargets = document.querySelectorAll(
-        CART_CONTAINER_SELS.join(', ') + ', form[action="/cart"]'
-      );
-      // Fall back to full document if no container found
-      var scanRoots = scanTargets.length ? scanTargets : [document.body];
-      for (var t = 0; t < scanRoots.length; t++) {
-        var direct = scanRoots[t].children;
-        for (var d = 0; d < direct.length; d++) {
-          if (direct[d].innerHTML.indexOf(vidStr) !== -1) return direct[d];
+      var scanRoots7 = document.querySelectorAll(CART_CONTAINER_SELS.join(', ') + ', form[action="/cart"]');
+      if (!scanRoots7.length) scanRoots7 = [document.body];
+      for (var t = 0; t < scanRoots7.length; t++) {
+        var all7 = scanRoots7[t].querySelectorAll('*');
+        var best7 = null;
+        for (var e = 0; e < all7.length; e++) {
+          var el7 = all7[e];
+          if (el7.innerHTML.indexOf(vidStr) === -1) continue;
+          if (!best7 || el7.innerHTML.length < best7.innerHTML.length) best7 = el7;
         }
+        if (best7) return best7;
       }
     }
 
-    // Only log when cart elements actually exist on the page (suppress noise on product pages).
-    var cartVisible = document.querySelector(CART_CONTAINER_SELS.join(', '));
-    if (cartVisible) {
-      console.warn('[Ikarus] ⚠️ Could not find cart row for variant', vidStr, '(line', lineIndex, '). Theme HTML:', cartVisible.innerHTML.substring(0, 300));
+    // --- Diagnostic (fires once per variant, only when a cart container IS in the DOM) ---
+    if (!findCartItemRow._logged) findCartItemRow._logged = {};
+    var diagKey = vidStr + ':' + lineIndex;
+    if (!findCartItemRow._logged[diagKey]) {
+      findCartItemRow._logged[diagKey] = true;
+      var diag = document.querySelector(CART_CONTAINER_SELS.join(', '));
+      if (diag) {
+        console.group('[Ikarus] ❌ Cart row not found — theme structure needed');
+        console.log('Variant ID:', vidStr, '| Line index:', lineIndex);
+        console.log('Container tag/id/class:', diag.tagName, diag.id, diag.className);
+        console.log('Direct child count:', diag.children.length);
+        if (diag.children[0]) {
+          var fc = diag.children[0];
+          console.log('First child:', fc.tagName, fc.id, fc.className);
+          if (fc.children[0]) {
+            var gc = fc.children[0];
+            console.log('First grandchild:', gc.tagName, gc.id, gc.className);
+          }
+        }
+        console.log('Container outerHTML (first 600 chars):\n', diag.outerHTML.substring(0, 600));
+        console.groupEnd();
+      }
     }
     return null;
   }
