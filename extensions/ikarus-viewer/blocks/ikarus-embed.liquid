@@ -17,15 +17,32 @@
     const isBundle = variantIds.length > 1;
 
     // Build items array for Shopify AJAX API
+    const configToken = event.data.configurationToken || '';
+
     const items = variantIds.map(function(vid, index) {
       const isParent = index === 0;
       const baseProperties = event.data.properties || {};
-      
+
       const properties = Object.assign({}, baseProperties);
       if (isBundle) {
         properties._bundle_id = bundleId;
         properties._is_bundle_parent = isParent ? 'true' : 'false';
         properties._is_bundle_child = isParent ? 'false' : 'true';
+      }
+
+      // Add each selected option as a visible cart property on the parent item.
+      // Child items stay hidden via bundle logic, so only the parent needs display props.
+      if (isParent && configToken) {
+        configToken.split(',').forEach(function(token) {
+          token = token.trim();
+          if (!token) return;
+          var colonIdx = token.indexOf(':');
+          if (colonIdx > 0) {
+            var key = token.substring(0, colonIdx).trim();
+            var val = token.substring(colonIdx + 1).trim();
+            if (key && val) properties[key] = val;
+          }
+        });
       }
 
       return {
@@ -200,14 +217,25 @@
              }
          }
          if (row && !row.dataset.ikarusPriceUpdated) {
-            var priceEls = row.querySelectorAll('.price, .cart-item__price-wrapper, [data-cart-item-price], .cart-item__totals, .cart__price, .cart-item__price, dd, span');
-            priceEls.forEach(function(pel) {
-              var oldPriceStr = (b.parent.final_line_price / 100).toFixed(2);
-              var newPriceStr = (b.totalPrice / 100).toFixed(2);
-              if (pel.innerText.includes(oldPriceStr)) {
-                pel.innerHTML = pel.innerHTML.replace(new RegExp(oldPriceStr, 'g'), newPriceStr);
-              }
-            });
+            var oldCents = b.parent.final_line_price;
+            var newCents = b.totalPrice;
+            if (oldCents !== newCents) {
+              var oldStr = (oldCents / 100).toFixed(2);
+              var newStr = (newCents / 100).toFixed(2);
+              // Comma-formatted version for locales that use "3,000.00"
+              var oldStrComma = parseFloat(oldStr).toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2});
+              var newStrComma = parseFloat(newStr).toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2});
+
+              var priceEls = row.querySelectorAll('.price, .cart-item__price-wrapper, [data-cart-item-price], .cart-item__totals, .cart__price, .cart-item__price, dd, span');
+              priceEls.forEach(function(pel) {
+                var text = pel.innerText || '';
+                if (text.includes(oldStr)) {
+                  pel.innerHTML = pel.innerHTML.replace(new RegExp(oldStr, 'g'), newStr);
+                } else if (oldStrComma !== oldStr && text.includes(oldStrComma)) {
+                  pel.innerHTML = pel.innerHTML.replace(new RegExp(oldStrComma.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'g'), newStrComma);
+                }
+              });
+            }
             row.dataset.ikarusPriceUpdated = "true";
          }
       });
