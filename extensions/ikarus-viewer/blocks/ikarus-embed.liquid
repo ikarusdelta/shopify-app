@@ -185,27 +185,6 @@
       document.head.appendChild(styleEl);
     }
 
-    // One-shot diagnostic: log which containers are found and what cart-like elements exist
-    if (!applyBundleCSS._diag) {
-      applyBundleCSS._diag = true;
-      var foundContainers = IKARUS_CONTAINERS.filter(function(s) {
-        try { return !!document.querySelector(s); } catch(e) { return false; }
-      });
-      console.log('[Ikarus] DIAG containers matched:', foundContainers.length ? foundContainers : 'NONE');
-      if (!foundContainers.length) {
-        // Scan all elements for cart-like IDs/classes
-        var suspects = [];
-        document.querySelectorAll('*').forEach(function(el) {
-          var id = el.id || '';
-          var cls = typeof el.className === 'string' ? el.className : '';
-          if ((id + ' ' + cls).match(/cart|Cart|basket|bag|line.item/i) && el.children.length > 0) {
-            suspects.push(el.tagName + (id ? '#' + id : '') + ' [' + cls.split(' ').slice(0,2).join('.') + '] children:' + el.children.length);
-          }
-        });
-        console.log('[Ikarus] DIAG cart-like elements on page:', suspects.slice(0, 30));
-      }
-    }
-
     var rules = [];
     Object.keys(cachedBundles).forEach(function(bid) {
       var b = cachedBundles[bid];
@@ -229,11 +208,34 @@
     });
 
     styleEl.innerHTML = rules.join('\n');
-    console.log('[Ikarus] Bundle CSS injected — hiding child at positions:',
-      Object.values(cachedBundles).flatMap(function(b) {
-        return b.children.map(function(c) { return c._lineIndex; });
-      })
-    );
+
+    var positions = Object.values(cachedBundles).flatMap(function(b) {
+      return b.children.map(function(c) { return c._lineIndex; });
+    });
+    console.log('[Ikarus] Bundle CSS injected — hiding child at positions:', positions);
+
+    // Diagnostic: fires once when we actually have children to hide.
+    // Tells us which containers matched and what cart-like elements exist RIGHT NOW.
+    if (positions.length > 0 && !applyBundleCSS._diag) {
+      applyBundleCSS._diag = true;
+      var matched = IKARUS_CONTAINERS.filter(function(s) {
+        try { return !!document.querySelector(s); } catch(e) { return false; }
+      });
+      console.log('[Ikarus] DIAG — containers matched on this page:', matched.length ? matched : 'NONE — add the correct one below');
+      // Always dump cart-like elements so we can pinpoint the exact selector
+      var suspects = [];
+      document.querySelectorAll('[id*="cart"],[id*="Cart"],[class*="cart"],[class*="Cart"],[id*="basket"],[class*="basket"]').forEach(function(el) {
+        if (el.children.length > 0) {
+          suspects.push({
+            selector: el.tagName + (el.id ? '#' + el.id : '') + (typeof el.className === 'string' && el.className ? '.' + el.className.trim().split(/\s+/).join('.') : ''),
+            children: el.children.length,
+            firstChildTag: el.children[0] ? el.children[0].tagName : '-',
+            firstChildClass: el.children[0] ? (el.children[0].className || '') : '-',
+          });
+        }
+      });
+      console.log('[Ikarus] DIAG — cart-like elements with children:', suspects);
+    }
   }
 
   // --- SECONDARY: DOM manipulation to update parent price ---
