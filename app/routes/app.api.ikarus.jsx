@@ -161,6 +161,12 @@ export const action = async ({ request }) => {
           }
         }
 
+        // Build priceMapping: variantId → the price just set in Shopify
+        const priceMapping = {};
+        for (const v of variantsToUpdate) {
+          priceMapping[v.id.split('/').pop()] = parseFloat(v.price);
+        }
+
         const menuSlots = Array.from(menuSlotsSet);
 
         // FIXED: Pack mapping configurations securely inside the 'products' array block
@@ -169,14 +175,15 @@ export const action = async ({ request }) => {
             await fetch(`${lambdaUrl}/viewer/${projectId}/options`, {
               method: "PATCH",
               headers: { "Content-Type": "application/json", "x-access-token": accessToken },
-              body: JSON.stringify({ 
-                shopify: { 
-                  basePrice: basePrice, 
+              body: JSON.stringify({
+                shopify: {
+                  basePrice: basePrice,
                   products: [
                     {
                       productId: productId,
                       menuSlots: menuSlots,
                       varientMapping: variantMapping,
+                      priceMapping: priceMapping,
                       isParent: isParent
                     }
                   ]
