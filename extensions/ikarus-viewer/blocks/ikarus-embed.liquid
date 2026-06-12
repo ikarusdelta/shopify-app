@@ -2,12 +2,19 @@
   window.addEventListener('message', function(event) {
     if (!event.data || event.data.type !== 'IKARUS_SHOPIFY_ADD_TO_CART') return;
 
+    console.log('[EMBED] ▶ IKARUS_SHOPIFY_ADD_TO_CART received:', JSON.stringify(event.data));
+
     // Grab all variant IDs sent from React
     const variantIds = Array.isArray(event.data.variantIds) && event.data.variantIds.length > 0
       ? event.data.variantIds
       : [event.data.variantId].filter(Boolean);
 
-    if (variantIds.length === 0) return;
+    console.log('[EMBED] variantIds resolved:', variantIds);
+
+    if (variantIds.length === 0) {
+      console.warn('[EMBED] ⚠️ No variantIds — add to cart aborted. Check viewer variant matching.');
+      return;
+    }
 
     const bundleId = 'bundle_' + Date.now() + '_' + Math.random().toString(36).substr(2, 9);
     const isBundle = variantIds.length > 1;
@@ -85,6 +92,7 @@
       var item = queue.shift();
       if (!item) { finishCartAdd(added); return; }
 
+      console.log('[EMBED] sequential add item:', JSON.stringify(item));
       fetch('/cart/add.js', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', 'Accept': 'application/json' },
@@ -92,13 +100,21 @@
       })
       .then(function(r) { return r.json().then(function(res) { return { ok: r.ok, data: res }; }); })
       .then(function(result) {
-        if (result.ok) added.push(result.data);
+        if (result.ok) {
+          console.log('[EMBED] sequential add ✅ variantId=' + item.id);
+          added.push(result.data);
+        } else {
+          console.warn('[EMBED] sequential add ❌ variantId=' + item.id + ':', result.data);
+        }
         addSequentially(queue, added);
       })
-      .catch(function() {
+      .catch(function(err) {
+        console.error('[EMBED] sequential add fetch error variantId=' + item.id + ':', err);
         addSequentially(queue, added); // continue even on error
       });
     }
+
+    console.log('[EMBED] items to add to cart:', JSON.stringify(items));
 
     // --- Try bulk multi-add first ---
     fetch('/cart/add.js', {
@@ -113,13 +129,17 @@
     })
     .then(function(data) {
       if (data.ok) {
+        console.log('[EMBED] ✅ cart/add.js bulk success:', data.result);
         var addedItems = data.result.items || [data.result];
         finishCartAdd(addedItems);
       } else {
+        console.warn('[EMBED] ❌ cart/add.js bulk failed (status ' + data.status + '):', data.errBody);
+        console.log('[EMBED] falling back to sequential add...');
         addSequentially(items.slice(), []);
       }
     })
-    .catch(function() {
+    .catch(function(err) {
+      console.error('[EMBED] cart/add.js fetch error:', err);
       addSequentially(items.slice(), []);
     });
   });

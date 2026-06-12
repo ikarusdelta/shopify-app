@@ -231,7 +231,10 @@ export const action = async ({ request }) => {
             }
           }
 
-          const finalCalculatedPrice = (basePrice + attributeAddonPrice).toFixed(2);
+          // Child products carry only their own option prices — basePrice belongs to the parent only
+          const finalCalculatedPrice = isParent
+            ? (basePrice + attributeAddonPrice).toFixed(2)
+            : attributeAddonPrice.toFixed(2);
 
           return {
             id: variant.id,
