@@ -414,15 +414,6 @@ export const action = async ({ request }) => {
         create: { shop: session.shop, productId, projectId, attrMapping: attrMappingRaw, useAsAttributes, isParent },
       });
 
-      // If this product is the parent, clear isParent from all sibling products in the same project
-      // so only one product per project can hold the parent role at a time.
-      if (isParent && projectId) {
-        await prisma.productConfig.updateMany({
-          where: { shop: session.shop, projectId, productId: { not: productId } },
-          data: { isParent: false },
-        });
-      }
-
       console.log(`[Ikarus Save] DB upsert successful.`);
 
       // 2. Push to Ikarus Lambda API (Cleaned: useAsAttributes completely excluded from payload as requested)

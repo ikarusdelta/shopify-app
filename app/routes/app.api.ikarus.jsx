@@ -39,14 +39,15 @@ export const action = async ({ request }) => {
       if (!projectId) return Response.json({ error: "No Project ID provided" });
       if (!accessToken) return Response.json({ error: "No Access Token set in Settings" });
 
-      // Check if another product in this project already holds the parent role
+      // Check if another product in this project already holds the parent role.
+      // Use the numeric productId from the URL param (DB stores numeric IDs, not GIDs).
       let siblingIsParent = false;
-      if (projectId && callerProductId) {
+      if (projectId && productId) {
         const siblingParent = await prisma.productConfig.findFirst({
           where: {
             shop: session.shop,
             projectId,
-            productId: { not: callerProductId },
+            productId: { not: productId },
             isParent: true,
           },
         });
@@ -234,6 +235,15 @@ export const action = async ({ request }) => {
           update: { projectId, attrMapping: attrMappingRaw, useAsAttributes, isParent },
           create: { shop: session.shop, productId, projectId, attrMapping: attrMappingRaw, useAsAttributes, isParent },
         });
+
+        // When this product becomes parent, clear the role from all siblings so only one product
+        // per project holds isParent:true at a time.
+        if (isParent && projectId) {
+          await prisma.productConfig.updateMany({
+            where: { shop: session.shop, projectId, productId: { not: productId } },
+            data: { isParent: false },
+          });
+        }
 
         if (projectId && accessToken) {
           const menuPrices = {};
