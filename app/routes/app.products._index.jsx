@@ -714,6 +714,9 @@ function ProductConfigPage() {
       setParentSetBySiblingLive(true);
       setIsParent(false);
     }
+    if (data?.shopifyBasePrice != null) {
+      setBasePrice(String(data.shopifyBasePrice));
+    }
     if (data?.menuOptions) {
       setViewerMenus(data.menuOptions);
       setMapRows((currentRows) => {

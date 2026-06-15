@@ -67,7 +67,7 @@ export const action = async ({ request }) => {
           return Response.json({ error: `API Error: ${response.status} ${err}` });
         }
         const data = await response.json();
-        return Response.json({ menuOptions: data.menuOptions || {}, siblingIsParent });
+        return Response.json({ menuOptions: data.menuOptions || {}, siblingIsParent, shopifyBasePrice: data.shopifyBasePrice ?? null });
       } catch (err) {
         if (err.name === "AbortError") return Response.json({ error: "Load menus timed out (15s)." });
         return Response.json({ error: `Fetch failed: ${err.message}` });
