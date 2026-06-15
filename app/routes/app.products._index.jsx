@@ -99,8 +99,9 @@ export const loader = async ({ request }) => {
     parentSetBySibling = !!siblingParent;
   }
 
-  // Auto-parent: if no sibling holds the parent role, default this product to parent
   const savedIsParent = config?.isParent === true;
+  // Auto-parent when no sibling holds the role; cleared automatically when another
+  // product in the project is explicitly saved as parent (see save_config cleanup below).
   const effectiveIsParent = savedIsParent || !parentSetBySibling;
 
   return {
@@ -412,6 +413,15 @@ export const action = async ({ request }) => {
         update: { projectId, attrMapping: attrMappingRaw, useAsAttributes, isParent },
         create: { shop: session.shop, productId, projectId, attrMapping: attrMappingRaw, useAsAttributes, isParent },
       });
+
+      // If this product is the parent, clear isParent from all sibling products in the same project
+      // so only one product per project can hold the parent role at a time.
+      if (isParent && projectId) {
+        await prisma.productConfig.updateMany({
+          where: { shop: session.shop, projectId, productId: { not: productId } },
+          data: { isParent: false },
+        });
+      }
 
       console.log(`[Ikarus Save] DB upsert successful.`);
 
