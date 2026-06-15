@@ -282,18 +282,22 @@ export const action = async ({ request }) => {
           for (const option of variant.selectedOptions) {
             const matchedRow = attrMapping.find((row) => row.shopifyOption === option.name);
             if (matchedRow && matchedRow.viewerMenu && matchedRow.items) {
+              const menuId = matchedRow.viewerMenuId || matchedRow.viewerMenu;
               const matchedItem = matchedRow.items.find((item) => item.shopifyValue === option.value);
-              if (matchedItem?.viewerOption?.label) {
-                keyTokens.push(`${nk(matchedRow.viewerMenu)}:${nk(matchedItem.viewerOption.label)}`);
+              const optId = matchedItem?.viewerOption?.id;
+              if (matchedItem && menuId && optId) {
+                keyTokens.push(`${menuId}:${optId}`);
               }
             }
           }
 
           const variantRow = attrMapping.find((row) => row.shopifyOption === "Product Variants");
           if (variantRow && variantRow.viewerMenu && variantRow.items) {
+            const menuId = variantRow.viewerMenuId || variantRow.viewerMenu;
             const matchedItem = variantRow.items.find((item) => item.shopifyValue === variant.title);
-            if (matchedItem?.viewerOption?.label) {
-              keyTokens.push(`${nk(variantRow.viewerMenu)}:${nk(matchedItem.viewerOption.label)}`);
+            const optId = matchedItem?.viewerOption?.id;
+            if (matchedItem && menuId && optId) {
+              keyTokens.push(`${menuId}:${optId}`);
             }
           }
 
@@ -315,7 +319,7 @@ export const action = async ({ request }) => {
 
         if (projectId && accessToken && Object.keys(variantMapping).length > 0) {
           try {
-            const menuSlots = Array.from(new Set(attrMapping.map(row => row.viewerMenu).filter(Boolean)));
+            const menuSlots = Array.from(new Set(attrMapping.map(row => row.viewerMenuId || row.viewerMenu).filter(Boolean)));
 
             // Build menuPrices so the viewer's per-option price badges stay in sync.
             // Without this, badges only update when save_config is called separately.

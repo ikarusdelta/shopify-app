@@ -157,19 +157,23 @@ export const action = async ({ request }) => {
           for (const option of variant.selectedOptions) {
             const matchedRow = attrMapping.find((row) => row.shopifyOption === option.name);
             if (matchedRow?.viewerMenu && matchedRow?.items) {
-              menuSlotsSet.add(matchedRow.viewerMenu);
+              const menuId = matchedRow.viewerMenuId || matchedRow.viewerMenu;
+              menuSlotsSet.add(menuId);
               const matchedItem = matchedRow.items.find((item) => item.shopifyValue === option.value);
-              if (matchedItem?.viewerOption?.label) {
-                keyTokens.push(`${matchedRow.viewerMenu}:${matchedItem.viewerOption.label}`);
+              const optId = matchedItem?.viewerOption?.id;
+              if (matchedItem && menuId && optId) {
+                keyTokens.push(`${menuId}:${optId}`);
               }
             }
           }
           const variantRow = attrMapping.find((row) => row.shopifyOption === "Product Variants");
           if (variantRow?.viewerMenu && variantRow?.items) {
-            menuSlotsSet.add(variantRow.viewerMenu);
+            const menuId = variantRow.viewerMenuId || variantRow.viewerMenu;
+            menuSlotsSet.add(menuId);
             const matchedItem = variantRow.items.find((item) => item.shopifyValue === variant.title);
-            if (matchedItem?.viewerOption?.label) {
-              keyTokens.push(`${variantRow.viewerMenu}:${matchedItem.viewerOption.label}`);
+            const optId = matchedItem?.viewerOption?.id;
+            if (matchedItem && menuId && optId) {
+              keyTokens.push(`${menuId}:${optId}`);
             }
           }
           if (keyTokens.length > 0) {
