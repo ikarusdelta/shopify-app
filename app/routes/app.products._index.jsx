@@ -1009,16 +1009,14 @@ function ProductConfigPage() {
                     alignItems: "center",
                     gap: "6px",
                     fontSize: "12px",
-                    cursor: parentSetBySiblingLive ? "not-allowed" : "pointer",
+                    cursor: "pointer",
                     color: "#2c6ecb",
                     fontWeight: "600",
-                    opacity: parentSetBySiblingLive ? 0.45 : 1,
                     userSelect: "none",
                   }}>
                     <input
                       type="checkbox"
                       checked={isParent}
-                      disabled={parentSetBySiblingLive}
                       onChange={(e) => {
                         const checked = e.target.checked;
                         setIsParent(checked);
@@ -1036,16 +1034,14 @@ function ProductConfigPage() {
                     alignItems: "center",
                     gap: "6px",
                     fontSize: "12px",
-                    cursor: (isParent || parentSetBySiblingLive) ? "not-allowed" : "pointer",
+                    cursor: "pointer",
                     color: "#B83D24",
                     fontWeight: "600",
-                    opacity: (isParent || parentSetBySiblingLive) ? 0.45 : 1,
                     userSelect: "none",
                   }}>
                     <input
                       type="checkbox"
                       checked={useAsAttributes}
-                      disabled={isParent || parentSetBySiblingLive}
                       onChange={(e) => {
                         const checked = e.target.checked;
                         setUseAsAttributes(checked);
@@ -1075,7 +1071,6 @@ function ProductConfigPage() {
                   step="0.01"
                   min="0"
                   value={basePrice}
-                  disabled={useAsAttributes}
                   onChange={(e) => setBasePrice(e.target.value)}
                   style={{
                     width: "100%",
