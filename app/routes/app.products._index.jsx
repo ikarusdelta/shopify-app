@@ -316,6 +316,34 @@ export const action = async ({ request }) => {
           try {
             const menuSlots = Array.from(new Set(attrMapping.map(row => row.viewerMenu).filter(Boolean)));
 
+            // Build menuPrices so the viewer's per-option price badges stay in sync.
+            // Without this, badges only update when save_config is called separately.
+            const menuPrices = {};
+            const mapping = {};
+            attrMapping.forEach((row) => {
+              if (!row.viewerMenu) return;
+              mapping[row.shopifyOption] = row.viewerMenu;
+              if (!row.items) return;
+              // Use UUID as the key when available; fall back to label for old mappings
+              const menuKey = row.viewerMenuId || row.viewerMenu;
+              if (!menuPrices[menuKey]) menuPrices[menuKey] = {};
+              row.items.forEach((item) => {
+                if (item.viewerOption) {
+                  // slug is the canonical identifier (material slug or model target key)
+                  const slug = item.viewerOption.slug
+                    || item.viewerOption.target
+                    || item.viewerOption.id
+                    || item.viewerOption.label;
+                  const parsedPrice = parseFloat(item.price);
+                  // Only send explicitly non-zero prices — skip 0/unset so existing
+                  // master.json prices (e.g. 1650) are never overwritten with 0.
+                  if (slug && !isNaN(parsedPrice) && parsedPrice > 0) {
+                    menuPrices[menuKey][slug] = parsedPrice;
+                  }
+                }
+              });
+            });
+
             const response = await fetch(`${lambdaUrl}/viewer/${projectId}/options`, {
               method: "PATCH",
               headers: {
@@ -323,6 +351,8 @@ export const action = async ({ request }) => {
                 "x-access-token": accessToken,
               },
               body: JSON.stringify({
+                menuPrices,
+                mapping,
                 shopify: {
                   basePrice: basePrice,
                   products: [{
@@ -396,13 +426,17 @@ export const action = async ({ request }) => {
           mapping[row.shopifyOption] = row.viewerMenu;
 
           if (!row.items) return;
-          if (!menuPrices[row.viewerMenu]) menuPrices[row.viewerMenu] = {};
-
+          const menuKey = row.viewerMenuId || row.viewerMenu;
+          if (!menuPrices[menuKey]) menuPrices[menuKey] = {};
           row.items.forEach((item) => {
             if (item.viewerOption) {
-              const key = item.viewerOption.id || item.viewerOption.label;
-              if (key) {
-                menuPrices[row.viewerMenu][key] = parseFloat(item.price) || 0;
+              const slug = item.viewerOption.slug
+                || item.viewerOption.target
+                || item.viewerOption.id
+                || item.viewerOption.label;
+              const parsedPrice = parseFloat(item.price);
+              if (slug && !isNaN(parsedPrice) && parsedPrice > 0) {
+                menuPrices[menuKey][slug] = parsedPrice;
               }
             }
           });
@@ -736,12 +770,19 @@ function ProductConfigPage() {
 
       if (best && bestScore >= 0.4) {
         usedV.push(best);
+        const bestMenu = viewerMenus[best] || {};
+        const menuId   = bestMenu.__id || null;
 
         const shopifyValues = Array.isArray(opt.values) ? opt.values : [];
-        const vMenuOpts = Object.keys(viewerMenus[best] || {}).map((label) => ({
-          id: viewerMenus[best][label]?.id || null,
-          label,
-        }));
+        // Filter out __id / __type meta keys added by Lambda
+        const vMenuOpts = Object.keys(bestMenu)
+          .filter(k => !k.startsWith('__'))
+          .map((label) => ({
+            id:     bestMenu[label]?.id     || null,
+            slug:   bestMenu[label]?.slug   || null,
+            target: bestMenu[label]?.target || null,
+            label,
+          }));
 
         const usedVOpts = [];
         const items = shopifyValues.map((sVal) => {
@@ -781,7 +822,7 @@ function ProductConfigPage() {
           }
         });
 
-        return { shopifyOption: opt.name, viewerMenu: best, items };
+        return { shopifyOption: opt.name, viewerMenu: best, viewerMenuId: menuId, items };
       }
 
       return { shopifyOption: opt.name, viewerMenu: "", items: [] };
@@ -800,9 +841,14 @@ function ProductConfigPage() {
       const selectedSource = newRows[index].shopifyOption;
       if (!selectedSource || !value) {
         newRows[index].items = [];
+        newRows[index].viewerMenuId = null;
         setMapRows(newRows);
         return;
       }
+
+      // Store the menu UUID alongside the label so server actions can use it
+      const selectedMenuData = viewerMenus?.[value] || {};
+      newRows[index].viewerMenuId = selectedMenuData.__id || null;
 
       let shopifyValues = [];
       let sourceData = [];
@@ -821,12 +867,16 @@ function ProductConfigPage() {
         });
       }
 
-      const vMenuOpts = viewerMenus && viewerMenus[value] ? Object.keys(viewerMenus[value]) : [];
+      // Filter out Lambda meta keys (__id, __type) before iterating options
+      const vMenuOpts = Object.keys(selectedMenuData).filter(k => !k.startsWith('__'));
       const items = shopifyValues.map((val, i) => {
         const vOptLabel = vMenuOpts[i];
-        const vOpt = vOptLabel
-          ? { id: viewerMenus[value][vOptLabel]?.id || null, label: vOptLabel }
-          : null;
+        const vOpt = vOptLabel ? {
+          id:     selectedMenuData[vOptLabel]?.id     || null,
+          slug:   selectedMenuData[vOptLabel]?.slug   || null,
+          target: selectedMenuData[vOptLabel]?.target || null,
+          label:  vOptLabel,
+        } : null;
 
         return {
           shopifyValue: val,
@@ -843,7 +893,12 @@ function ProductConfigPage() {
             shopifyValue: "",
             shopifyPrice: "0",
             price: "0",
-            viewerOption: { id: viewerMenus[value][label]?.id || null, label },
+            viewerOption: {
+              id:     selectedMenuData[label]?.id     || null,
+              slug:   selectedMenuData[label]?.slug   || null,
+              target: selectedMenuData[label]?.target || null,
+              label,
+            },
           });
         }
       }
