@@ -86,7 +86,7 @@ export const loader = async ({ request }) => {
 
   // Check if a sibling product (same projectId, same shop) already holds the parent role
   const currentProjectId = config?.projectId || "";
-  let parentSetBySibling = false;
+  let parentSetBySiblingLive = false;
   if (currentProjectId) {
     const siblingParent = await prisma.productConfig.findFirst({
       where: {
@@ -96,13 +96,13 @@ export const loader = async ({ request }) => {
         isParent: true,
       },
     });
-    parentSetBySibling = !!siblingParent;
+    parentSetBySiblingLive = !!siblingParent;
   }
 
   const savedIsParent = config?.isParent === true;
   // Auto-parent when no sibling holds the role; cleared automatically when another
   // product in the project is explicitly saved as parent (see save_config cleanup below).
-  const effectiveIsParent = savedIsParent || !parentSetBySibling;
+  const effectiveIsParent = savedIsParent || !parentSetBySiblingLive;
 
   return {
     type: "detail",
@@ -115,7 +115,7 @@ export const loader = async ({ request }) => {
     // Safely cast database row value to explicit boolean flag
     useAsAttributes: config?.useAsAttributes === true,
     isParent: effectiveIsParent,
-    parentSetBySibling,
+    parentSetBySiblingLive,
     accessToken: settings?.accessToken || "",
     lambdaUrl: process.env.LAMBDA_URL || DEFAULT_LAMBDA_URL,
   };
@@ -602,7 +602,7 @@ export default function ProductsPage() {
 }
 
 function ProductConfigPage() {
-  const { product, projectId: savedProjectId, attrMapping: savedMapping, productOptions, useAsAttributes: savedUseAsAttributes, isParent: savedIsParent, parentSetBySibling } = useLoaderData();
+  const { product, projectId: savedProjectId, attrMapping: savedMapping, productOptions, useAsAttributes: savedUseAsAttributes, isParent: savedIsParent, parentSetBySiblingLive } = useLoaderData();
   const actionData = useActionData();
   const navigation = useNavigation();
   const [isLoadingMenus, setIsLoadingMenus] = useState(false);
@@ -683,6 +683,7 @@ function ProductConfigPage() {
   
   const [useAsAttributes, setUseAsAttributes] = useState(savedUseAsAttributes || false);
   const [isParent, setIsParent] = useState(savedIsParent || false);
+  const [parentSetBySiblingLiveLive, setParentSetBySiblingLive] = useState(parentSetBySiblingLive);
 
   // FIXED: Sync React UI checkbox values when the database loader resolves upon refresh
   useEffect(() => {
@@ -718,6 +719,10 @@ function ProductConfigPage() {
   const hasMapping = Array.isArray(mapRows) && mapRows.some((r) => r?.viewerMenu && r.viewerMenu.trim() !== "");
 
   const processMenuOptions = (data) => {
+    if (data?.siblingIsParent) {
+      setParentSetBySiblingLive(true);
+      setIsParent(false);
+    }
     if (data?.menuOptions) {
       setViewerMenus(data.menuOptions);
       setMapRows((currentRows) => {
@@ -735,7 +740,7 @@ function ProductConfigPage() {
 
   useEffect(() => {
     if (savedProjectId && !viewerMenus && !isLoadingMenus) {
-      doManualFetch({ intent: "load_menus", projectId: savedProjectId }, setIsLoadingMenus, processMenuOptions);
+      doManualFetch({ intent: "load_menus", projectId: savedProjectId, productId: product?.id || "" }, setIsLoadingMenus, processMenuOptions);
     }
   }, [savedProjectId]);
 
@@ -747,7 +752,7 @@ function ProductConfigPage() {
 
   const handleLoadMenus = () => {
     if (!projectId) return;
-    doManualFetch({ intent: "load_menus", projectId }, setIsLoadingMenus, processMenuOptions, "✅ Viewer menus loaded successfully!");
+    doManualFetch({ intent: "load_menus", projectId, productId: product?.id || "" }, setIsLoadingMenus, processMenuOptions, "✅ Viewer menus loaded successfully!");
   };
 
   const strSimilarity = (a, b) => {
@@ -1004,16 +1009,16 @@ function ProductConfigPage() {
                     alignItems: "center",
                     gap: "6px",
                     fontSize: "12px",
-                    cursor: parentSetBySibling ? "not-allowed" : "pointer",
+                    cursor: parentSetBySiblingLive ? "not-allowed" : "pointer",
                     color: "#2c6ecb",
                     fontWeight: "600",
-                    opacity: parentSetBySibling ? 0.45 : 1,
+                    opacity: parentSetBySiblingLive ? 0.45 : 1,
                     userSelect: "none",
                   }}>
                     <input
                       type="checkbox"
                       checked={isParent}
-                      disabled={parentSetBySibling}
+                      disabled={parentSetBySiblingLive}
                       onChange={(e) => {
                         const checked = e.target.checked;
                         setIsParent(checked);
@@ -1021,7 +1026,7 @@ function ProductConfigPage() {
                       }}
                     />
                     Parent Product
-                    {parentSetBySibling && (
+                    {parentSetBySiblingLive && (
                       <span style={{ fontSize: "10px", color: "#888", fontWeight: "400" }}>(set by sibling)</span>
                     )}
                   </label>
@@ -1031,16 +1036,16 @@ function ProductConfigPage() {
                     alignItems: "center",
                     gap: "6px",
                     fontSize: "12px",
-                    cursor: (isParent || parentSetBySibling) ? "not-allowed" : "pointer",
+                    cursor: (isParent || parentSetBySiblingLive) ? "not-allowed" : "pointer",
                     color: "#B83D24",
                     fontWeight: "600",
-                    opacity: (isParent || parentSetBySibling) ? 0.45 : 1,
+                    opacity: (isParent || parentSetBySiblingLive) ? 0.45 : 1,
                     userSelect: "none",
                   }}>
                     <input
                       type="checkbox"
                       checked={useAsAttributes}
-                      disabled={isParent || parentSetBySibling}
+                      disabled={isParent || parentSetBySiblingLive}
                       onChange={(e) => {
                         const checked = e.target.checked;
                         setUseAsAttributes(checked);

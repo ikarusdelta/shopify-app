@@ -35,8 +35,23 @@ export const action = async ({ request }) => {
     // --- Intent: LOAD MENUS ---
     if (intent === "load_menus") {
       const projectId = formData.get("projectId")?.toString().trim();
+      const callerProductId = formData.get("productId")?.toString().trim() || productId || "";
       if (!projectId) return Response.json({ error: "No Project ID provided" });
       if (!accessToken) return Response.json({ error: "No Access Token set in Settings" });
+
+      // Check if another product in this project already holds the parent role
+      let siblingIsParent = false;
+      if (projectId && callerProductId) {
+        const siblingParent = await prisma.productConfig.findFirst({
+          where: {
+            shop: session.shop,
+            projectId,
+            productId: { not: callerProductId },
+            isParent: true,
+          },
+        });
+        siblingIsParent = !!siblingParent;
+      }
 
       try {
         const controller = new AbortController();
@@ -51,7 +66,7 @@ export const action = async ({ request }) => {
           return Response.json({ error: `API Error: ${response.status} ${err}` });
         }
         const data = await response.json();
-        return Response.json({ menuOptions: data.menuOptions || {} });
+        return Response.json({ menuOptions: data.menuOptions || {}, siblingIsParent });
       } catch (err) {
         if (err.name === "AbortError") return Response.json({ error: "Load menus timed out (15s)." });
         return Response.json({ error: `Fetch failed: ${err.message}` });
