@@ -352,6 +352,37 @@
     return null;
   }
 
+  // Locate a cart row for an item using ONLY stable identifiers (no blind position).
+  // Used to hide bundle child rows in JS — robust on themes (like the Ikarus custom
+  // cart block) that expose no data-key/data-variant-id attributes and whose DOM
+  // doesn't match the nth-child container selectors, so CSS hiding can't reach them.
+  function findRowByVariant(item) {
+    var vidStr = item.variant_id ? item.variant_id.toString() : '';
+    var keyStr = item.key || '';
+    var rowSel = 'tr, li, article, [class*="cart-line"], [class*="cart-item"], [class*="cart__item"], [class*="CartItem"]';
+
+    // 1. data-key / data-variant-id (precise where present)
+    var byAttr = (keyStr && document.querySelector('[data-key="' + keyStr + '"]'))
+      || (vidStr && document.querySelector('[data-variant-id="' + vidStr + '"]'));
+    if (byAttr) return byAttr.closest(rowSel) || byAttr;
+
+    // 2. A link whose href carries the variant id or line key
+    var linkEl = (vidStr && document.querySelector('a[href*="' + vidStr + '"]'))
+      || (keyStr && document.querySelector('a[href*="' + keyStr + '"]'));
+    if (linkEl) return linkEl.closest(rowSel);
+
+    // 3. Scan rendered cart rows for one whose markup contains the variant id
+    if (vidStr) {
+      var rows = document.querySelectorAll('.cart-line, [class*="cart-line"], [class*="cart-item"], [class*="CartItem"], tr, li');
+      for (var i = 0; i < rows.length; i++) {
+        if (rows[i].innerHTML.indexOf(vidStr) !== -1) {
+          return rows[i].closest('.cart-line, [class*="cart-line"]') || rows[i];
+        }
+      }
+    }
+    return null;
+  }
+
   function updateParentPrice(b) {
     var parentRow = findParentRow(b.parent);
     if (!parentRow) return;
@@ -408,6 +439,17 @@
         totalChildren += b.children.length;
         updateParentPrice(b);
         updateBundleVariantDisplay(b);
+
+        // Hide each child row in JS (variant-id based) — the reliable layer for
+        // themes where CSS attribute/position rules can't target the row. Guard
+        // against accidentally hiding the parent row.
+        var parentRow = findParentRow(b.parent);
+        b.children.forEach(function(child) {
+          var childRow = findRowByVariant(child);
+          if (childRow && childRow !== parentRow) {
+            childRow.style.setProperty('display', 'none', 'important');
+          }
+        });
       }
     });
     if (totalChildren > 0 && cachedCartItemCount > 0) {
