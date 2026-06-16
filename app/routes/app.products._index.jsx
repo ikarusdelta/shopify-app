@@ -719,7 +719,10 @@ function ProductConfigPage() {
       setParentSetBySiblingLive(true);
       setIsParent(false);
     }
-    if (data?.shopifyBasePrice != null) {
+    // shopifyBasePrice is project-level — only the parent product uses it.
+    // Child products always have basePrice = 0 (their cost is purely add-ons).
+    const thisProductIsParent = !data?.siblingIsParent;
+    if (data?.shopifyBasePrice != null && thisProductIsParent) {
       setBasePrice(String(data.shopifyBasePrice));
     }
     if (data?.menuOptions) {

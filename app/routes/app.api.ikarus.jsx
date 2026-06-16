@@ -277,19 +277,22 @@ export const action = async ({ request }) => {
           });
 
           try {
+            const lambdaShopify = {
+              // Only the parent product owns the project-level basePrice.
+              // Sending it from a child would overwrite the parent's saved value.
+              ...(isParent ? { basePrice } : {}),
+              products: [{
+                productId: productId,
+                isParent: isParent,
+              }]
+            };
             await fetch(`${lambdaUrl}/viewer/${projectId}/options`, {
               method: "PATCH",
               headers: { "Content-Type": "application/json", "x-access-token": accessToken },
-              body: JSON.stringify({ 
-                menuPrices, 
-                mapping, 
-                shopify: { 
-                  basePrice,
-                  products: [{
-                    productId: productId,
-                    isParent: isParent,
-                  }]
-                },
+              body: JSON.stringify({
+                menuPrices,
+                mapping,
+                shopify: lambdaShopify,
                 "use as attributes of product": useAsAttributes
               }),
             });
