@@ -673,8 +673,9 @@ function ProductConfigPage() {
   const [mapRows, setMapRows] = useState(Array.isArray(savedMapping) ? savedMapping : []);
   const [viewerMenus, setViewerMenus] = useState(null);
 
-  const initialBasePrice = product?.variants?.nodes?.[0]?.price || "0";
-  const [basePrice, setBasePrice] = useState(initialBasePrice);
+  // Initialized to "0"; restored from Lambda config (shopifyBasePrice) once load_menus completes.
+  // Using the first variant's current price here would cause doubled prices on re-sync.
+  const [basePrice, setBasePrice] = useState("0");
   
   const [useAsAttributes, setUseAsAttributes] = useState(savedUseAsAttributes || false);
   const [isParent, setIsParent] = useState(savedIsParent || false);
