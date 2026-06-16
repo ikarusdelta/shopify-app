@@ -474,51 +474,41 @@
     var childVariantIds = {};
     var parentVariantIds = {};
 
-    // One-time diagnostic so the real cart structure is visible. Paste both logs.
+    // Diagnostic that PIERCES shadow DOM and WAITS for the cart UI to render.
+    // Logs once, only after it actually finds cart content (avoids logging too early).
     if (!_ikDiagLogged) {
-      _ikDiagLogged = true;
       try {
-        // 1. The cart lines as Shopify sees them (order, ids, titles, bundle props).
-        var lineDiag = cachedCartItems.map(function (it, i) {
-          return {
-            i: i + 1,
-            variant_id: it.variant_id,
-            key: it.key,
-            product: it.product_title,
-            variant: it.variant_title,
-            handle: it.handle,
-            isParent: it.properties && it.properties._is_bundle_parent,
-            isChild: it.properties && it.properties._is_bundle_child,
-            bundle: it.properties && it.properties._bundle_id
-          };
-        });
-        console.log('[EMBED][DIAG] CART LINES:', JSON.stringify(lineDiag, null, 2));
-
-        // 2. Walk up from each product link to reveal the real row markup +
-        //    whatever uniquely identifies a line (data attrs / change links).
-        function chainOf(el) {
-          var chain = [];
-          for (var d = 0; d < 9 && el; d++) {
-            var cls = (el.className || '').toString().trim().split(/\s+/).filter(Boolean).slice(0, 4).join('.');
-            chain.push(el.tagName + (el.id ? '#' + el.id : '') + (cls ? '.' + cls : ''));
-            el = el.parentElement;
+        // Detect shadow hosts + collect cart-ish class names across the whole tree
+        // (light DOM + every shadow root).
+        var shadowHosts = [];
+        var cartClasses = {};
+        var sawSolara = false;
+        function walk(root) {
+          var els = root.querySelectorAll('*');
+          for (var i = 0; i < els.length; i++) {
+            var el = els[i];
+            if (el.shadowRoot) {
+              shadowHosts.push(el.tagName.toLowerCase() + (el.id ? '#' + el.id : '') + (el.className ? '.' + ('' + el.className).trim().split(/\s+/).slice(0, 2).join('.') : ''));
+              walk(el.shadowRoot);
+            }
+            var cn = ('' + (el.className || ''));
+            if (/cart|line|bundle|item/i.test(cn)) cartClasses[cn] = true;
+            if (!sawSolara && (el.textContent || '').indexOf('Solara') !== -1) sawSolara = true;
           }
-          return chain.join(' > ');
         }
-        var prodLinks = document.querySelectorAll('a[href*="/products/"]');
-        var linkDiag = Array.prototype.slice.call(prodLinks).map(function (a, i) {
-          return { i: i, href: a.getAttribute('href'), chain: chainOf(a) };
-        });
-        console.log('[EMBED][DIAG] PRODUCT LINKS (' + prodLinks.length + '):', JSON.stringify(linkDiag, null, 2));
+        walk(document);
 
-        // 3. Anything that could carry a line index/key: change links, remove buttons, qty inputs.
-        var liners = document.querySelectorAll(
-          'a[href*="/cart/change"], a[href*="cart/change"], a[href*="line="], [class*="remove"], [class*="Remove"], cart-remove-button, input[name*="updates"], input[name*="quantity"], [data-line], [data-index], [data-key], [data-variant-id], [data-cart-item-key]'
-        );
-        var linerDiag = Array.prototype.slice.call(liners).slice(0, 12).map(function (e) {
-          return { tag: e.tagName, html: (e.outerHTML || '').replace(/\s+/g, ' ').slice(0, 180) };
-        });
-        console.log('[EMBED][DIAG] LINE IDENTIFIERS (' + liners.length + '):', JSON.stringify(linerDiag, null, 2));
+        // Only log once the cart actually rendered something (shadow host or cart markup or text).
+        if (shadowHosts.length || Object.keys(cartClasses).length || sawSolara) {
+          _ikDiagLogged = true;
+          var lineDiag = cachedCartItems.map(function (it, i) {
+            return { i: i + 1, variant_id: it.variant_id, key: it.key, product: it.product_title, variant: it.variant_title, isParent: it.properties && it.properties._is_bundle_parent, isChild: it.properties && it.properties._is_bundle_child, bundle: it.properties && it.properties._bundle_id };
+          });
+          console.log('[EMBED][DIAG] CART LINES:', JSON.stringify(lineDiag, null, 2));
+          console.log('[EMBED][DIAG] SHADOW HOSTS (' + shadowHosts.length + '):', JSON.stringify(shadowHosts));
+          console.log('[EMBED][DIAG] CART-ISH CLASSES:', JSON.stringify(Object.keys(cartClasses).slice(0, 50)));
+          console.log('[EMBED][DIAG] body has product links:', document.querySelectorAll('a[href*="/products/"]').length, '| body has inputs:', document.querySelectorAll('input').length);
+        }
       } catch (e) { console.log('[EMBED][DIAG] error', e); }
     }
 
