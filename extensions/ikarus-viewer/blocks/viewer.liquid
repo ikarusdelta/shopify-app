@@ -1,18 +1,35 @@
 {%- liquid
   assign project_id = product.metafields.ikarus_delta.project_id.value
   assign mapping = product.metafields.ikarus_delta.mapping.value
+
+  # Resolve the viewer base URL. Fall back to production if the setting is blank
+  # (e.g. the field was cleared), and strip whitespace from a pasted tunnel link.
+  assign base_url = block.settings.viewer_base_url | strip
+  if base_url == blank
+    assign base_url = 'https://viewer.ikarus3d.com'
+  endif
+
+  # Use '&' if the base URL already carries a query string, otherwise '?'.
+  assign query_sep = '?'
+  if base_url contains '?'
+    assign query_sep = '&'
+  endif
+
+  assign viewer_src = base_url | append: query_sep | append: 'projectId=' | append: project_id
+
+  assign viewer_width = block.settings.width | default: 100
 -%}
 
 {% if project_id != blank %}
   <div
     class="ikarus-viewer"
     id="ikd-viewer-{{ block.id }}"
-    style="width:100%;height:{{ block.settings.height }}px;position:relative;"
+    style="width:{{ viewer_width }}%;height:{{ block.settings.height }}px;position:relative;margin:0 auto;"
     {{ block.shopify_attributes }}
   >
     <iframe
       id="ikd-iframe-{{ block.id }}"
-      src="{{ block.settings.viewer_base_url }}?projectId={{ project_id }}"
+      src="{{ viewer_src }}"
       style="width:100%;height:100%;border:none;"
       allow="fullscreen"
       loading="lazy"
@@ -85,6 +102,17 @@
       "label": "Viewer Base URL",
       "info": "Base URL of your IkarusDelta viewer. No trailing slash.",
       "default": "https://viewer.ikarus3d.com"
+    },
+    {
+      "type": "range",
+      "id": "width",
+      "label": "Width",
+      "info": "Percentage of the container width.",
+      "min": 10,
+      "max": 100,
+      "step": 5,
+      "unit": "%",
+      "default": 100
     },
     {
       "type": "range",
