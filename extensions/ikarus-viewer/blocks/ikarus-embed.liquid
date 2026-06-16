@@ -147,7 +147,9 @@
 
   // --- Bundle Child Hiding & Parent Price Update ---
   var cachedBundles = null;
-  var cachedCartItemCount = 0;
+  var cachedCartItemCount = 0;   // total quantity across lines (for the count bubble)
+  var cachedCartLineCount = 0;   // number of cart LINES (for position-based row mapping)
+  var _ikDiagLogged = false;     // one-time diagnostic guard
 
   function _applyCartCountDisplay(n) {
     document.querySelectorAll(
@@ -352,8 +354,33 @@
     return null;
   }
 
-  function updateParentPrice(b) {
-    var parentRow = findParentRow(b.parent);
+  // Returns the rendered cart row elements in cart.items order, by locating the
+  // container whose row count EXACTLY matches the number of cart lines. Position is
+  // the only collision-proof way to map a cart line to its row on this cart block
+  // (its rows expose no variant href / data-variant-id), and it's the same lookup
+  // that makes the parent title-combine work.
+  function getOrderedCartRows() {
+    if (!cachedCartLineCount) return null;
+    function rowsOf(el) {
+      return Array.prototype.slice.call(el.children).filter(function (c) {
+        var t = c.tagName;
+        return t !== 'THEAD' && t !== 'TFOOT' && t !== 'SCRIPT' && t !== 'STYLE' && t !== 'COLGROUP' && t !== 'CAPTION';
+      });
+    }
+    var containers = document.querySelectorAll(IKARUS_CONTAINERS.join(', '));
+    for (var c = 0; c < containers.length; c++) {
+      var kids = rowsOf(containers[c]);
+      if (kids.length === cachedCartLineCount) return kids;
+      for (var k = 0; k < kids.length; k++) {
+        var gk = rowsOf(kids[k]);
+        if (gk.length === cachedCartLineCount) return gk;
+      }
+    }
+    return null;
+  }
+
+  function updateParentPrice(b, parentRow) {
+    parentRow = parentRow || findParentRow(b.parent);
     if (!parentRow) return;
 
     var oldCents = b.parent.final_line_price;
@@ -381,9 +408,9 @@
   // Combines parent and child variant_title strings into the parent's variant display element.
   // e.g. "Black / TM Pine / Virta" + "Self Winterized Shower / Thermo Ash / Fibre Optic Starlight Ceiling"
   // → "Black / TM Pine / Virta / Self Winterized Shower / Thermo Ash / Fibre Optic Starlight Ceiling"
-  function updateBundleVariantDisplay(b) {
+  function updateBundleVariantDisplay(b, parentRow) {
     if (!b.parent || !b.children.length) return;
-    var parentRow = findParentRow(b.parent);
+    parentRow = parentRow || findParentRow(b.parent);
     if (!parentRow) return;
 
     var variantEl = parentRow.querySelector('.cart-item-variant, [class*="variant"]');
@@ -440,13 +467,48 @@
   function enforceBundleVisuals() {
     if (!cachedBundles) return;
     applyBundleCSS(); // re-inject CSS on every tick (idempotent, no network)
+
+    var rows = getOrderedCartRows(); // position-based row list (preferred), or null
     var totalChildren = 0;
     var childVariantIds = {};
     var parentVariantIds = {};
+
+    // One-time diagnostic so the cart structure is visible if anything is still off.
+    if (!_ikDiagLogged) {
+      _ikDiagLogged = true;
+      try {
+        var diag = Object.keys(cachedBundles).map(function (bid) {
+          var b = cachedBundles[bid];
+          return {
+            bundle: bid,
+            parentLine: b.parent ? b.parent._lineIndex : null,
+            childLines: b.children.map(function (c) { return c._lineIndex; })
+          };
+        });
+        console.log('[EMBED] bundle map:', JSON.stringify(diag),
+          '| cartLines:', cachedCartLineCount,
+          '| orderedRowsFound:', rows ? rows.length : 'NONE');
+      } catch (e) {}
+    }
+
     Object.keys(cachedBundles).forEach(function(bid) {
       var b = cachedBundles[bid];
-      if (b.parent && b.children.length) {
-        totalChildren += b.children.length;
+      if (!b.parent || !b.children.length) return;
+      totalChildren += b.children.length;
+
+      // PREFERRED: map each line to its row by position (collision-proof).
+      if (rows) {
+        var parentRow = rows[b.parent._lineIndex - 1] || null;
+        updateParentPrice(b, parentRow);
+        updateBundleVariantDisplay(b, parentRow);
+        b.children.forEach(function(child) {
+          var childRow = rows[child._lineIndex - 1];
+          if (childRow && childRow !== parentRow) {
+            childRow.style.setProperty('display', 'none', 'important');
+          }
+        });
+      } else {
+        // FALLBACK: variant-id based (themes that expose variant href/data attrs).
         updateParentPrice(b);
         updateBundleVariantDisplay(b);
         if (b.parent.variant_id != null) parentVariantIds[b.parent.variant_id.toString()] = true;
@@ -456,9 +518,7 @@
       }
     });
 
-    // Hide all bundle child rows (handles multiple bundles sharing a child variant),
-    // while never hiding a parent row.
-    hideChildRows(childVariantIds, parentVariantIds);
+    if (!rows) hideChildRows(childVariantIds, parentVariantIds);
 
     if (totalChildren > 0 && cachedCartItemCount > 0) {
       var logicalCount = Math.max(0, cachedCartItemCount - totalChildren);
@@ -485,6 +545,7 @@
         });
         cachedBundles = bundles;
         cachedCartItemCount = cart.item_count;
+        cachedCartLineCount = cart.items.length;
         applyBundleCSS();      // inject CSS immediately
         enforceBundleVisuals(); // then try price/variant/count update
       })
