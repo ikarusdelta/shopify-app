@@ -87,18 +87,30 @@ export const action = async ({ request }) => {
       console.log(`[API] CREATE_VARIATIONS -> isParent string: "${formData.get("isParent")}", parsed boolean: ${isParent}`);
 
       try {
-        const existingRes = await admin.graphql(
-          `query getVariants($id: ID!) {
-            product(id: $id) {
-              variants(first: 100) {
-                nodes { id title price selectedOptions { name value } }
+        // Paginate through ALL variants — products can exceed 100 variants
+        // (e.g. 6 colors × 9 interior × 5 heater = 270). Fetching only the first
+        // page would leave later variants un-priced (stuck at their old value).
+        const variants = [];
+        let cursor = null;
+        let hasNextPage = true;
+        while (hasNextPage) {
+          const existingRes = await admin.graphql(
+            `query getVariants($id: ID!, $cursor: String) {
+              product(id: $id) {
+                variants(first: 250, after: $cursor) {
+                  nodes { id title price selectedOptions { name value } }
+                  pageInfo { hasNextPage endCursor }
+                }
               }
-            }
-          }`,
-          { variables: { id: productGid } }
-        );
-        const existingData = await existingRes.json();
-        const variants = existingData.data?.product?.variants?.nodes || [];
+            }`,
+            { variables: { id: productGid, cursor } }
+          );
+          const existingData = await existingRes.json();
+          const conn = existingData.data?.product?.variants;
+          variants.push(...(conn?.nodes || []));
+          hasNextPage = conn?.pageInfo?.hasNextPage || false;
+          cursor = conn?.pageInfo?.endCursor || null;
+        }
 
         if (variants.length === 0) {
           return Response.json({ variationError: "No variants found for this product." });
@@ -129,28 +141,33 @@ export const action = async ({ request }) => {
           };
         });
 
-        const res = await admin.graphql(
-          `mutation productVariantsBulkUpdate($productId: ID!, $variants: [ProductVariantsBulkInput!]!) {
-            productVariantsBulkUpdate(productId: $productId, variants: $variants) {
-              productVariants { id price }
-              userErrors { field message }
-            }
-          }`,
-          { variables: { productId: productGid, variants: variantsToUpdate } }
-        );
-        const data = await res.json();
-        
-        if (data.errors) {
-          console.error("GraphQL Schema Error:", data.errors);
-          return Response.json({ variationError: `Shopify GraphQL Error: ${data.errors[0].message}` });
-        }
-        
-        const errors = data.data?.productVariantsBulkUpdate?.userErrors;
-        if (errors?.length > 0) {
-          return Response.json({ variationError: `Shopify Error: ${errors.map(e => e.message).join(", ")}` });
-        }
+        // productVariantsBulkUpdate accepts at most 250 variants per call — chunk it.
+        const updatedVariants = [];
+        for (let i = 0; i < variantsToUpdate.length; i += 250) {
+          const chunk = variantsToUpdate.slice(i, i + 250);
+          const res = await admin.graphql(
+            `mutation productVariantsBulkUpdate($productId: ID!, $variants: [ProductVariantsBulkInput!]!) {
+              productVariantsBulkUpdate(productId: $productId, variants: $variants) {
+                productVariants { id price }
+                userErrors { field message }
+              }
+            }`,
+            { variables: { productId: productGid, variants: chunk } }
+          );
+          const data = await res.json();
 
-        const updatedVariants = data.data?.productVariantsBulkUpdate?.productVariants || [];
+          if (data.errors) {
+            console.error("GraphQL Schema Error:", data.errors);
+            return Response.json({ variationError: `Shopify GraphQL Error: ${data.errors[0].message}` });
+          }
+
+          const errors = data.data?.productVariantsBulkUpdate?.userErrors;
+          if (errors?.length > 0) {
+            return Response.json({ variationError: `Shopify Error: ${errors.map(e => e.message).join(", ")}` });
+          }
+
+          updatedVariants.push(...(data.data?.productVariantsBulkUpdate?.productVariants || []));
+        }
 
         // Build priceMapping: variantId → exact price set on Shopify
         const priceMapping = {};
