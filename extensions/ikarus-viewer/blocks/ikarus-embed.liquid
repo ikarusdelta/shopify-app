@@ -252,7 +252,23 @@
 
       b.children.forEach(function(child) {
         var n = child._lineIndex; // 1-based
-        // Only generate rules for containers that actually exist on this page.
+
+        // PRIMARY (order-independent): hide by the Shopify line key / variant id.
+        // This is what makes MULTIPLE bundles work — once several bundles interleave
+        // in the cart, a child's nth-child POSITION is no longer reliable, but its
+        // line key is globally unique and its variant id is stable.
+        var ckey = (child.key || '').toString();
+        var cvid = (child.variant_id || child.id || '').toString();
+        if (ckey) {
+          rules.push('[data-key="' + ckey + '"] { display: none !important; }');
+          rules.push('[data-cart-item-key="' + ckey + '"] { display: none !important; }');
+        }
+        if (cvid) {
+          rules.push('[data-variant-id="' + cvid + '"] { display: none !important; }');
+          rules.push('[data-variant="' + cvid + '"] { display: none !important; }');
+        }
+
+        // FALLBACK (position-based): only generate rules for containers that exist.
         matched.forEach(function(csel) {
           rules.push(csel + ' > *:nth-child(' + n + ') { display: none !important; }');
         });
@@ -284,16 +300,18 @@
     var vidStr = parentItem.variant_id ? parentItem.variant_id.toString() : '';
     var keyStr = parentItem.key || '';
 
-    // 1. CartItem-N IDs (Dawn)
+    // 1. data-key / data-variant-id — most precise, unique per cart line.
+    // Tried FIRST so multiple bundles resolve to the correct parent row regardless
+    // of how the lines are ordered in the cart.
+    var byAttr = (keyStr && document.querySelector('[data-key="' + keyStr + '"]'))
+      || (vidStr && document.querySelector('[data-variant-id="' + vidStr + '"]'));
+    if (byAttr) return byAttr.closest('tr, li, article, [class*="cart-item"], [class*="cart__item"], [class*="CartItem"]') || byAttr;
+
+    // 2. CartItem-N IDs (Dawn) — position based, matches the cart line order.
     var byId = document.getElementById('CartItem-' + n)
       || document.getElementById('CartDrawer-Item-' + n)
       || document.getElementById('cart-item-' + n);
     if (byId) return byId;
-
-    // 2. data-key / data-variant-id
-    var byAttr = document.querySelector('[data-key="' + keyStr + '"]')
-      || document.querySelector('[data-variant-id="' + vidStr + '"]');
-    if (byAttr) return byAttr.closest('tr, li, article, [class*="cart-item"], [class*="cart__item"], [class*="CartItem"]') || byAttr;
 
     // 3. href link containing variant ID or key
     var linkEl = document.querySelector('a[href*="' + vidStr + '"], a[href*="' + keyStr + '"]');
