@@ -494,30 +494,31 @@
         });
         console.log('[EMBED][DIAG] CART LINES:', JSON.stringify(lineDiag, null, 2));
 
-        // 2. The rendered rows and what each one exposes to identify it.
-        var candidateRows = rows || document.querySelectorAll(
-          '.cart-line, [class*="cart-line"], tr[class*="cart-item"], li[class*="cart-item"], [class*="CartItem"], [class*="cart__item"]'
-        );
-        var rowDiag = Array.prototype.slice.call(candidateRows).map(function (row, i) {
-          var dataAttrs = {};
-          if (row.attributes) {
-            for (var a = 0; a < row.attributes.length; a++) {
-              var at = row.attributes[a];
-              if (at.name.indexOf('data-') === 0 || at.name === 'id') dataAttrs[at.name] = at.value;
-            }
+        // 2. Walk up from each product link to reveal the real row markup +
+        //    whatever uniquely identifies a line (data attrs / change links).
+        function chainOf(el) {
+          var chain = [];
+          for (var d = 0; d < 9 && el; d++) {
+            var cls = (el.className || '').toString().trim().split(/\s+/).filter(Boolean).slice(0, 4).join('.');
+            chain.push(el.tagName + (el.id ? '#' + el.id : '') + (cls ? '.' + cls : ''));
+            el = el.parentElement;
           }
-          var hrefs = Array.prototype.slice.call(row.querySelectorAll('a[href]')).map(function (a) { return a.getAttribute('href'); }).slice(0, 3);
-          var qty = row.querySelector('input[name], [data-quantity-variant-id], [data-line], [data-index], [data-cart-item-index]');
-          return {
-            domIndex: i + 1,
-            tag: row.tagName + '.' + (row.className || '').toString().split(' ').slice(0, 3).join('.'),
-            attrs: dataAttrs,
-            hrefs: hrefs,
-            qtyEl: qty ? (qty.outerHTML || '').slice(0, 160) : null,
-            text: (row.textContent || '').replace(/\s+/g, ' ').trim().slice(0, 90)
-          };
+          return chain.join(' > ');
+        }
+        var prodLinks = document.querySelectorAll('a[href*="/products/"]');
+        var linkDiag = Array.prototype.slice.call(prodLinks).map(function (a, i) {
+          return { i: i, href: a.getAttribute('href'), chain: chainOf(a) };
         });
-        console.log('[EMBED][DIAG] RENDERED ROWS:', JSON.stringify(rowDiag, null, 2));
+        console.log('[EMBED][DIAG] PRODUCT LINKS (' + prodLinks.length + '):', JSON.stringify(linkDiag, null, 2));
+
+        // 3. Anything that could carry a line index/key: change links, remove buttons, qty inputs.
+        var liners = document.querySelectorAll(
+          'a[href*="/cart/change"], a[href*="cart/change"], a[href*="line="], [class*="remove"], [class*="Remove"], cart-remove-button, input[name*="updates"], input[name*="quantity"], [data-line], [data-index], [data-key], [data-variant-id], [data-cart-item-key]'
+        );
+        var linerDiag = Array.prototype.slice.call(liners).slice(0, 12).map(function (e) {
+          return { tag: e.tagName, html: (e.outerHTML || '').replace(/\s+/g, ' ').slice(0, 180) };
+        });
+        console.log('[EMBED][DIAG] LINE IDENTIFIERS (' + liners.length + '):', JSON.stringify(linerDiag, null, 2));
       } catch (e) { console.log('[EMBED][DIAG] error', e); }
     }
 
