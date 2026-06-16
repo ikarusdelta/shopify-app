@@ -149,6 +149,7 @@
   var cachedBundles = null;
   var cachedCartItemCount = 0;   // total quantity across lines (for the count bubble)
   var cachedCartLineCount = 0;   // number of cart LINES (for position-based row mapping)
+  var cachedCartItems = [];      // raw /cart.js items (for diagnostics + matching)
   var _ikDiagLogged = false;     // one-time diagnostic guard
 
   function _applyCartCountDisplay(n) {
@@ -473,22 +474,51 @@
     var childVariantIds = {};
     var parentVariantIds = {};
 
-    // One-time diagnostic so the cart structure is visible if anything is still off.
+    // One-time diagnostic so the real cart structure is visible. Paste both logs.
     if (!_ikDiagLogged) {
       _ikDiagLogged = true;
       try {
-        var diag = Object.keys(cachedBundles).map(function (bid) {
-          var b = cachedBundles[bid];
+        // 1. The cart lines as Shopify sees them (order, ids, titles, bundle props).
+        var lineDiag = cachedCartItems.map(function (it, i) {
           return {
-            bundle: bid,
-            parentLine: b.parent ? b.parent._lineIndex : null,
-            childLines: b.children.map(function (c) { return c._lineIndex; })
+            i: i + 1,
+            variant_id: it.variant_id,
+            key: it.key,
+            product: it.product_title,
+            variant: it.variant_title,
+            handle: it.handle,
+            isParent: it.properties && it.properties._is_bundle_parent,
+            isChild: it.properties && it.properties._is_bundle_child,
+            bundle: it.properties && it.properties._bundle_id
           };
         });
-        console.log('[EMBED] bundle map:', JSON.stringify(diag),
-          '| cartLines:', cachedCartLineCount,
-          '| orderedRowsFound:', rows ? rows.length : 'NONE');
-      } catch (e) {}
+        console.log('[EMBED][DIAG] CART LINES:', JSON.stringify(lineDiag, null, 2));
+
+        // 2. The rendered rows and what each one exposes to identify it.
+        var candidateRows = rows || document.querySelectorAll(
+          '.cart-line, [class*="cart-line"], tr[class*="cart-item"], li[class*="cart-item"], [class*="CartItem"], [class*="cart__item"]'
+        );
+        var rowDiag = Array.prototype.slice.call(candidateRows).map(function (row, i) {
+          var dataAttrs = {};
+          if (row.attributes) {
+            for (var a = 0; a < row.attributes.length; a++) {
+              var at = row.attributes[a];
+              if (at.name.indexOf('data-') === 0 || at.name === 'id') dataAttrs[at.name] = at.value;
+            }
+          }
+          var hrefs = Array.prototype.slice.call(row.querySelectorAll('a[href]')).map(function (a) { return a.getAttribute('href'); }).slice(0, 3);
+          var qty = row.querySelector('input[name], [data-quantity-variant-id], [data-line], [data-index], [data-cart-item-index]');
+          return {
+            domIndex: i + 1,
+            tag: row.tagName + '.' + (row.className || '').toString().split(' ').slice(0, 3).join('.'),
+            attrs: dataAttrs,
+            hrefs: hrefs,
+            qtyEl: qty ? (qty.outerHTML || '').slice(0, 160) : null,
+            text: (row.textContent || '').replace(/\s+/g, ' ').trim().slice(0, 90)
+          };
+        });
+        console.log('[EMBED][DIAG] RENDERED ROWS:', JSON.stringify(rowDiag, null, 2));
+      } catch (e) { console.log('[EMBED][DIAG] error', e); }
     }
 
     Object.keys(cachedBundles).forEach(function(bid) {
@@ -544,6 +574,7 @@
           }
         });
         cachedBundles = bundles;
+        cachedCartItems = cart.items;
         cachedCartItemCount = cart.item_count;
         cachedCartLineCount = cart.items.length;
         applyBundleCSS();      // inject CSS immediately
