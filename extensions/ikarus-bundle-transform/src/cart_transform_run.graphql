@@ -3,17 +3,6 @@ query CartTransformRunInput {
     lines {
       id
       quantity
-      bundleId: attribute(key: "_bundle_id") {
-        value
-      }
-      isBundleParent: attribute(key: "_is_bundle_parent") {
-        value
-      }
-      merchandise {
-        ... on ProductVariant {
-          id
-        }
-      }
     }
   }
 }
