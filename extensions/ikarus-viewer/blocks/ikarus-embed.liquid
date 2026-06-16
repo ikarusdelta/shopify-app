@@ -398,25 +398,38 @@
     variantEl.textContent = combined;
   }
 
-  // Hide EVERY cart row that displays one of the given child variant ids.
-  // Child products are always distinct products from parents, so a row showing a
-  // child variant id is always a bundle child to hide. Using a set + hiding all
-  // matches (not just the first) is what makes MULTIPLE bundles that share the same
-  // child config work — each bundle's child row is hidden, not just one of them.
-  function hideChildRows(childIds) {
-    var ids = Object.keys(childIds);
-    if (!ids.length) return;
+  // True if the row references the given variant id via its product link or a
+  // data-variant-id attribute. We deliberately do NOT scan innerHTML — a substring
+  // match over the whole row wrongly flags parent rows that merely mention a child
+  // variant id somewhere in their markup, which hides the wrong bundle.
+  function rowHasVariant(row, vid) {
+    return !!(row.querySelector('a[href*="' + vid + '"]')
+      || row.querySelector('[data-variant-id="' + vid + '"]'));
+  }
+
+  // Hide every cart row that represents a bundle child. A row is hidden only if it
+  // references a CHILD variant id and does NOT reference any PARENT variant id —
+  // so parent rows are never hidden, even when several bundles are in the cart and
+  // share the same child config (the same child variant id appears in several rows).
+  function hideChildRows(childIds, parentIds) {
+    var cids = Object.keys(childIds);
+    if (!cids.length) return;
+    var pids = Object.keys(parentIds);
     var rows = document.querySelectorAll(
       '.cart-line, [class*="cart-line"], tr[class*="cart-item"], li[class*="cart-item"], [class*="CartItem"], [class*="cart__item"]'
     );
     for (var r = 0; r < rows.length; r++) {
       var row = rows[r];
-      for (var i = 0; i < ids.length; i++) {
-        var vid = ids[i];
-        var hasVariant = row.querySelector('a[href*="' + vid + '"]')
-          || row.querySelector('[data-variant-id="' + vid + '"]')
-          || row.innerHTML.indexOf(vid) !== -1;
-        if (hasVariant) {
+
+      // Never hide a row that represents a parent line.
+      var isParent = false;
+      for (var p = 0; p < pids.length; p++) {
+        if (rowHasVariant(row, pids[p])) { isParent = true; break; }
+      }
+      if (isParent) continue;
+
+      for (var i = 0; i < cids.length; i++) {
+        if (rowHasVariant(row, cids[i])) {
           row.style.setProperty('display', 'none', 'important');
           break;
         }
@@ -429,20 +442,23 @@
     applyBundleCSS(); // re-inject CSS on every tick (idempotent, no network)
     var totalChildren = 0;
     var childVariantIds = {};
+    var parentVariantIds = {};
     Object.keys(cachedBundles).forEach(function(bid) {
       var b = cachedBundles[bid];
       if (b.parent && b.children.length) {
         totalChildren += b.children.length;
         updateParentPrice(b);
         updateBundleVariantDisplay(b);
+        if (b.parent.variant_id != null) parentVariantIds[b.parent.variant_id.toString()] = true;
         b.children.forEach(function(child) {
           if (child.variant_id != null) childVariantIds[child.variant_id.toString()] = true;
         });
       }
     });
 
-    // Hide all bundle child rows (handles multiple bundles sharing a child variant).
-    hideChildRows(childVariantIds);
+    // Hide all bundle child rows (handles multiple bundles sharing a child variant),
+    // while never hiding a parent row.
+    hideChildRows(childVariantIds, parentVariantIds);
 
     if (totalChildren > 0 && cachedCartItemCount > 0) {
       var logicalCount = Math.max(0, cachedCartItemCount - totalChildren);
