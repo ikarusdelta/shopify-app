@@ -16,6 +16,8 @@ CREATE TABLE "ProductConfig" (
     "attrPrices" TEXT NOT NULL DEFAULT '{}',
     "attrMapping" TEXT NOT NULL DEFAULT '[]',
     "selectedOptions" TEXT NOT NULL DEFAULT '[]',
+    "useAsAttributes" BOOLEAN NOT NULL DEFAULT false,
+    "isParent" BOOLEAN NOT NULL DEFAULT false,
 
     CONSTRAINT "ProductConfig_pkey" PRIMARY KEY ("id")
 );
