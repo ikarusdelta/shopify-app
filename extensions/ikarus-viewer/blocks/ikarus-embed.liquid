@@ -512,28 +512,37 @@
 
         if (onCartScreen) {
           _ikDiagLogged = true;
-          // Find a leaf element showing a child's options text, walk up to reveal the row markup.
-          var target = null, all = document.querySelectorAll('*');
-          for (var t = 0; t < all.length; t++) {
-            var e = all[t];
-            if (e.children.length <= 2 && (e.textContent || '').indexOf('as attributes') !== -1) { target = e; break; }
+          // Find the VISIBLE element whose OWN text node shows a child line's options,
+          // skipping head/script/style. Then walk up to reveal the real row markup.
+          var SKIP = { SCRIPT: 1, STYLE: 1, NOSCRIPT: 1, TEMPLATE: 1, LINK: 1, META: 1, HEAD: 1, TITLE: 1 };
+          function ownText(e) {
+            var s = '';
+            for (var n = 0; n < e.childNodes.length; n++) { if (e.childNodes[n].nodeType === 3) s += e.childNodes[n].nodeValue; }
+            return s;
           }
-          var chain = 'NOT FOUND';
-          var containerHTML = '';
+          var target = null;
+          var cand = (document.body || document).querySelectorAll('*');
+          for (var t = 0; t < cand.length; t++) {
+            var e = cand[t];
+            if (SKIP[e.tagName]) continue;
+            var ot = ownText(e);
+            if (ot.indexOf('as attributes') !== -1 || ot.indexOf('Thermo Ash') !== -1 || ot.indexOf('Heater Gaurd') !== -1) { target = e; break; }
+          }
+          var chain = 'NOT FOUND', containerHTML = '';
           if (target) {
             var arr = [], el = target;
-            for (var d = 0; d < 12 && el; d++) {
-              var cls = ('' + (el.className || '')).trim().split(/\s+/).filter(Boolean).slice(0, 5).join('.');
+            for (var d = 0; d < 14 && el; d++) {
+              var cls = ('' + (el.className || '')).trim().split(/\s+/).filter(Boolean).slice(0, 6).join('.');
               arr.push(el.tagName + (el.id ? '#' + el.id : '') + (cls ? '.' + cls : ''));
               el = el.parentElement;
             }
             chain = arr.join(' < ');
             var up = target;
-            for (var u = 0; u < 6 && up.parentElement; u++) up = up.parentElement;
-            containerHTML = (up.outerHTML || '').replace(/\s+/g, ' ').slice(0, 2500);
+            for (var u = 0; u < 7 && up.parentElement; u++) up = up.parentElement;
+            containerHTML = (up.outerHTML || '').replace(/\s+/g, ' ').slice(0, 3000);
           }
           console.log('[EMBED][DIAG] ON CART SCREEN. iframes:', JSON.stringify(iframes));
-          console.log('[EMBED][DIAG] ROW CHAIN (child→up):', chain);
+          console.log('[EMBED][DIAG] ROW CHAIN (child element → up):', chain);
           console.log('[EMBED][DIAG] ROW CONTAINER HTML:', containerHTML);
         } else if (!_ikDiagLogged && (sawSolara || iframes.length)) {
           // Not on the cart screen yet — report what we see so we can locate the cart.
