@@ -118,9 +118,13 @@ export const action = async ({ request }) => {
             const matchedItem = variantRow.items.find((item) => item.shopifyValue === variant.title);
             if (matchedItem) attributeAddonPrice += parseFloat(matchedItem.price) || 0;
           }
-          return { 
-            id: variant.id, 
-            price: (basePrice + attributeAddonPrice).toFixed(2),
+          // Child products carry only their own option prices — basePrice belongs to the parent only
+          const finalPrice = isParent
+            ? (basePrice + attributeAddonPrice).toFixed(2)
+            : attributeAddonPrice.toFixed(2);
+          return {
+            id: variant.id,
+            price: finalPrice,
             inventoryItem: { tracked: false }
           };
         });
@@ -147,6 +151,12 @@ export const action = async ({ request }) => {
         }
 
         const updatedVariants = data.data?.productVariantsBulkUpdate?.productVariants || [];
+
+        // Build priceMapping: variantId → exact price set on Shopify
+        const priceMapping = {};
+        for (const v of variantsToUpdate) {
+          priceMapping[v.id.split('/').pop()] = parseFloat(v.price);
+        }
 
         // Build Multi-Product Token Maps
         const variantMapping = {};
@@ -189,14 +199,15 @@ export const action = async ({ request }) => {
             await fetch(`${lambdaUrl}/viewer/${projectId}/options`, {
               method: "PATCH",
               headers: { "Content-Type": "application/json", "x-access-token": accessToken },
-              body: JSON.stringify({ 
-                shopify: { 
-                  basePrice: basePrice, 
+              body: JSON.stringify({
+                shopify: {
+                  basePrice: basePrice,
                   products: [
                     {
                       productId: productId,
                       menuSlots: menuSlots,
                       varientMapping: variantMapping,
+                      priceMapping: priceMapping,
                       isParent: isParent
                     }
                   ]
