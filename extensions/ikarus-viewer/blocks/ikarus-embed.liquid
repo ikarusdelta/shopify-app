@@ -498,16 +498,49 @@
         }
         walk(document);
 
-        // Only log once the cart actually rendered something (shadow host or cart markup or text).
-        if (shadowHosts.length || Object.keys(cartClasses).length || sawSolara) {
+        // Only log on the ACTUAL cart screen — gate on the cart-page text from the
+        // screenshots, so we don't capture the product page's cart-notification popup.
+        var bodyText = (document.body && document.body.textContent) || '';
+        var onCartScreen = bodyText.indexOf('Order Summary') !== -1
+          || bodyText.indexOf('Proceed to Checkout') !== -1
+          || bodyText.indexOf('Subtotal') !== -1;
+
+        // iframes on this page (the cart UI may be hosted inside one).
+        var iframes = Array.prototype.slice.call(document.querySelectorAll('iframe')).map(function (f) {
+          return { id: f.id, src: (f.getAttribute('src') || '').slice(0, 120) };
+        });
+
+        if (onCartScreen) {
           _ikDiagLogged = true;
-          var lineDiag = cachedCartItems.map(function (it, i) {
-            return { i: i + 1, variant_id: it.variant_id, key: it.key, product: it.product_title, variant: it.variant_title, isParent: it.properties && it.properties._is_bundle_parent, isChild: it.properties && it.properties._is_bundle_child, bundle: it.properties && it.properties._bundle_id };
-          });
-          console.log('[EMBED][DIAG] CART LINES:', JSON.stringify(lineDiag, null, 2));
-          console.log('[EMBED][DIAG] SHADOW HOSTS (' + shadowHosts.length + '):', JSON.stringify(shadowHosts));
-          console.log('[EMBED][DIAG] CART-ISH CLASSES:', JSON.stringify(Object.keys(cartClasses).slice(0, 50)));
-          console.log('[EMBED][DIAG] body has product links:', document.querySelectorAll('a[href*="/products/"]').length, '| body has inputs:', document.querySelectorAll('input').length);
+          // Find a leaf element showing a child's options text, walk up to reveal the row markup.
+          var target = null, all = document.querySelectorAll('*');
+          for (var t = 0; t < all.length; t++) {
+            var e = all[t];
+            if (e.children.length <= 2 && (e.textContent || '').indexOf('as attributes') !== -1) { target = e; break; }
+          }
+          var chain = 'NOT FOUND';
+          var containerHTML = '';
+          if (target) {
+            var arr = [], el = target;
+            for (var d = 0; d < 12 && el; d++) {
+              var cls = ('' + (el.className || '')).trim().split(/\s+/).filter(Boolean).slice(0, 5).join('.');
+              arr.push(el.tagName + (el.id ? '#' + el.id : '') + (cls ? '.' + cls : ''));
+              el = el.parentElement;
+            }
+            chain = arr.join(' < ');
+            var up = target;
+            for (var u = 0; u < 6 && up.parentElement; u++) up = up.parentElement;
+            containerHTML = (up.outerHTML || '').replace(/\s+/g, ' ').slice(0, 2500);
+          }
+          console.log('[EMBED][DIAG] ON CART SCREEN. iframes:', JSON.stringify(iframes));
+          console.log('[EMBED][DIAG] ROW CHAIN (child→up):', chain);
+          console.log('[EMBED][DIAG] ROW CONTAINER HTML:', containerHTML);
+        } else if (!_ikDiagLogged && (sawSolara || iframes.length)) {
+          // Not on the cart screen yet — report what we see so we can locate the cart.
+          _ikDiagLogged = true;
+          console.log('[EMBED][DIAG] NOT on cart screen. iframes:', JSON.stringify(iframes),
+            '| product links:', document.querySelectorAll('a[href*="/products/"]').length,
+            '| inputs:', document.querySelectorAll('input').length);
         }
       } catch (e) { console.log('[EMBED][DIAG] error', e); }
     }
