@@ -7,7 +7,7 @@ name = "IkarusDeltaConnects"
 
 [access_scopes]
 # Learn more at https://shopify.dev/docs/apps/tools/cli/configuration#access_scopes
-scopes = "write_products,write_metaobjects,write_metaobject_definitions"
+scopes = "write_products,write_metaobjects,write_metaobject_definitions,write_cart_transforms"
 
 [product.metafields.ikarus_delta.project_id]
 type = "single_line_text_field"

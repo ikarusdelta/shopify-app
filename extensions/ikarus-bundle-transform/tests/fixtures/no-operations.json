@@ -7,7 +7,12 @@
         "lines": [
           {
             "id": "gid://shopify/CartLine/1",
-            "quantity": 1
+            "quantity": 1,
+            "bundleId": null,
+            "isBundleParent": null,
+            "merchandise": {
+              "id": "gid://shopify/ProductVariant/1"
+            }
           }
         ]
       }
