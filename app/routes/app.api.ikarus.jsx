@@ -169,12 +169,6 @@ export const action = async ({ request }) => {
           updatedVariants.push(...(data.data?.productVariantsBulkUpdate?.productVariants || []));
         }
 
-        // Build priceMapping: variantId → exact price set on Shopify
-        const priceMapping = {};
-        for (const v of variantsToUpdate) {
-          priceMapping[v.id.split('/').pop()] = parseFloat(v.price);
-        }
-
         // Build Multi-Product Token Maps
         const variantMapping = {};
         const menuSlotsSet = new Set();
@@ -224,7 +218,6 @@ export const action = async ({ request }) => {
                       productId: productId,
                       menuSlots: menuSlots,
                       varientMapping: variantMapping,
-                      priceMapping: priceMapping,
                       isParent: isParent
                     }
                   ]
