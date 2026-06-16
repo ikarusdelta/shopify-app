@@ -79,6 +79,7 @@
           }).length;
           var displayCount = Math.max(0, cart.item_count - childCount);
           _applyCartCountDisplay(displayCount);
+          _applyOrderSummaryCount(displayCount);
         });
 
       // Re-fetch and rebuild bundle data now that items are in the cart.
@@ -155,6 +156,23 @@
       if (el.children.length > 0) return; // skip wrapper spans, only leaf nodes
       el.textContent = n;
     });
+  }
+
+  // Patch the "Subtotal (N items)" text rendered by cart order-summary blocks
+  // (e.g. the Ikarus custom cart block) so the count reflects the logical bundle
+  // count instead of the raw cart.item_count. Operates on text nodes so it works
+  // regardless of the block's markup.
+  function _applyOrderSummaryCount(n) {
+    var label = '(' + n + ' ' + (n === 1 ? 'item' : 'items') + ')';
+    var re = /\(\s*\d+\s+items?\s*\)/i;
+    var walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT, null);
+    var node;
+    while ((node = walker.nextNode())) {
+      if (re.test(node.nodeValue)) {
+        var replaced = node.nodeValue.replace(re, label);
+        if (replaced !== node.nodeValue) node.nodeValue = replaced;
+      }
+    }
   }
 
   // All cart containers we try (nth-child CSS and position-based JS both use this list).
@@ -375,7 +393,9 @@
       }
     });
     if (totalChildren > 0 && cachedCartItemCount > 0) {
-      _applyCartCountDisplay(Math.max(0, cachedCartItemCount - totalChildren));
+      var logicalCount = Math.max(0, cachedCartItemCount - totalChildren);
+      _applyCartCountDisplay(logicalCount);
+      _applyOrderSummaryCount(logicalCount);
     }
   }
 
