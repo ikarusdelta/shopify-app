@@ -1,0 +1,48 @@
+{
+  "payload": {
+    "export": "cart-transform-run",
+    "target": "cart.transform.run",
+    "input": {
+      "cart": {
+        "lines": [
+          {
+            "id": "gid://shopify/CartLine/child",
+            "quantity": 1,
+            "bundleId": { "value": "bundle_123" },
+            "isBundleParent": { "value": "false" },
+            "merchandise": {
+              "id": "gid://shopify/ProductVariant/200",
+              "title": "None / Thermo Ash / Heater Gaurd",
+              "product": { "title": "Solara (as attributes)" }
+            }
+          },
+          {
+            "id": "gid://shopify/CartLine/parent",
+            "quantity": 1,
+            "bundleId": { "value": "bundle_123" },
+            "isBundleParent": { "value": "true" },
+            "merchandise": {
+              "id": "gid://shopify/ProductVariant/100",
+              "title": "Sierra Tan / Mixed Species / Harvia Virta",
+              "product": { "title": "Solara" }
+            }
+          }
+        ]
+      }
+    },
+    "output": {
+      "operations": [
+        {
+          "linesMerge": {
+            "parentVariantId": "gid://shopify/ProductVariant/100",
+            "cartLines": [
+              { "cartLineId": "gid://shopify/CartLine/child", "quantity": 1 },
+              { "cartLineId": "gid://shopify/CartLine/parent", "quantity": 1 }
+            ],
+            "title": "Solara - Sierra Tan / Mixed Species / Harvia Virta / None / Thermo Ash / Heater Gaurd"
+          }
+        }
+      ]
+    }
+  }
+}
