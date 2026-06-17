@@ -8,12 +8,14 @@ const NO_CHANGES: CartTransformRunResult = {
 };
 
 /**
- * No-op. The Ikarus `cart-items` app block is bundle-aware and renders the bundle
- * itself (groups parent + child lines by `_bundle_id`, shows the combined options,
- * hides the child rows). We must NOT merge here: a server-side merge folds the child
- * line into the parent, removing the line the block needs to read the child's options.
+ * No-op. Bundle presentation (combining the parent + child selected options into
+ * one visible line, hiding the child row, and patching the cart count) is handled
+ * client-side by the "Ikarus Cart Listener" embed (ikarus-embed.liquid).
  *
- * "Child never added without the parent" is enforced in the viewer, not here.
+ * We intentionally do NOT merge the lines here: a native linesMerge collapses the
+ * bundle to the parent variant and loses the child product's selected-option display.
+ * The "child is never added without the parent" rule is enforced in the viewer
+ * (handleAddToCartPostMessage), not here.
  */
 export function cartTransformRun(_input: CartTransformRunInput): CartTransformRunResult {
   return NO_CHANGES;
