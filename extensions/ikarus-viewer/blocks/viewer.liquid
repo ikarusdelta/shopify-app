@@ -9,13 +9,14 @@
     assign base_url = 'https://viewer.ikarus3d.com'
   endif
 
-  # Use '&' if the base URL already carries a query string, otherwise '?'.
-  assign query_sep = '?'
-  if base_url contains '?'
-    assign query_sep = '&'
-  endif
+  # Drop any query string baked into the setting (e.g. a hardcoded "?id=<fixed>"),
+  # otherwise every product would load that same fixed viewer. Each product must
+  # inject its OWN project id below.
+  assign base_url = base_url | split: '?' | first
 
-  assign viewer_src = base_url | append: query_sep | append: 'projectId=' | append: project_id
+  # The viewer reads the project id from the `id` query param (viewerStore: params.get('id')).
+  # We also append projectId for backward compatibility with older viewer builds.
+  assign viewer_src = base_url | append: '?id=' | append: project_id | append: '&projectId=' | append: project_id
 
   assign viewer_width = block.settings.width | default: 100
 -%}
@@ -100,7 +101,7 @@
       "type": "text",
       "id": "viewer_base_url",
       "label": "Viewer Base URL",
-      "info": "Base URL of your IkarusDelta viewer. No trailing slash.",
+      "info": "Base URL only — no trailing slash and NO ?id=. The product's Project ID is added automatically. e.g. https://viewer.ikarus3d.com",
       "default": "https://viewer.ikarus3d.com"
     },
     {
