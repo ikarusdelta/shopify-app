@@ -24,7 +24,7 @@
   <div
     class="ikarus-viewer"
     id="ikd-viewer-{{ block.id }}"
-    style="width:{{ viewer_width }}%;height:{{ block.settings.height }}px;position:relative;margin:0 auto;"
+    style="width:{{ viewer_width }}vw;max-width:100vw;height:{{ block.settings.height }}px;position:relative;left:50%;transform:translateX(-50%);"
     {{ block.shopify_attributes }}
   >
     <iframe
@@ -107,7 +107,7 @@
       "type": "range",
       "id": "width",
       "label": "Width",
-      "info": "Percentage of the container width.",
+      "info": "Percentage of the page width. 100 = full width.",
       "min": 10,
       "max": 100,
       "step": 5,
