@@ -27,6 +27,11 @@
       const baseProperties = event.data.properties || {};
 
       const properties = Object.assign({}, baseProperties);
+      // Attribution: tag every viewer-sourced line so we can match it back to an
+      // order via the orders/create webhook. Underscore prefix hides these from the
+      // cart/checkout UI while persisting them onto the final order line item.
+      properties._source = '3d_viewer';
+      properties._added_at = new Date().toISOString();
       if (isBundle) {
         properties._bundle_id = bundleId;
         properties._is_bundle_parent = isParent ? 'true' : 'false';
