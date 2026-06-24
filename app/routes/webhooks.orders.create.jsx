@@ -46,20 +46,81 @@ export const action = async ({ request }) => {
       return new Response(null, { status: 200 });
     }
 
-    // Per-line tax = sum of that line's tax_lines[].price. Scoped to the labeled
-    // (viewer-sourced) lines only, so the totals reflect the bundle/viewer products
-    // — not the whole order.
+    const num = (v) => Number(v ?? 0);
+
+    // Read a line item property value (properties are an array of { name, value }).
+    const propVal = (props, name) => {
+      const arr = Array.isArray(props) ? props : [];
+      const f = arr.find((p) => p?.name === name);
+      return f ? f.value : null;
+    };
+
+    // Per-line tax = sum of that line's tax_lines[].price (labeled lines only).
     const lineTax = (li) =>
       (Array.isArray(li?.tax_lines) ? li.tax_lines : []).reduce(
-        (sum, t) => sum + Number(t?.price ?? 0),
+        (sum, t) => sum + num(t?.price),
         0,
       );
 
-    const viewerSubtotal = viewerLines.reduce(
-      (sum, li) => sum + Number(li.price ?? 0) * Number(li.quantity ?? 0),
-      0,
-    );
-    const viewerTax = viewerLines.reduce((sum, li) => sum + lineTax(li), 0);
+    // --- Group viewer lines into bundles ---------------------------------------
+    // Lines added together as a bundle share a `_bundle_id` property (set by the
+    // viewer embed). Lines with no bundle id are standalone (their own group).
+    // Order is preserved by first appearance.
+    const groups = new Map();
+    const order = [];
+    for (const li of viewerLines) {
+      const bid = propVal(li.properties, "_bundle_id") || `single_${li.id}`;
+      if (!groups.has(bid)) {
+        groups.set(bid, []);
+        order.push(bid);
+      }
+      groups.get(bid).push(li);
+    }
+
+    const bundles = order.map((bid) => {
+      const lines = groups.get(bid);
+      const isRealBundle = !String(bid).startsWith("single_");
+      // The parent line carries the product name; child lines add their options.
+      const parent =
+        lines.find((li) => propVal(li.properties, "_is_bundle_parent") === "true") || lines[0];
+      const ordered = [parent, ...lines.filter((li) => li !== parent)];
+      const productTitle = parent.title || parent.name || "";
+      const optionParts = ordered.map((li) => li.variant_title).filter(Boolean);
+      const title = optionParts.length ? `${productTitle} — ${optionParts.join(" / ")}` : productTitle;
+
+      const items = lines.map((li) => ({
+        variant_id: li.variant_id,
+        product_id: li.product_id,
+        product_title: li.title ?? null,
+        variant_title: li.variant_title ?? null,
+        is_parent: propVal(li.properties, "_is_bundle_parent") === "true",
+        quantity: li.quantity,
+        price: li.price,
+        line_value: num(li.price) * num(li.quantity),
+        tax: lineTax(li),
+        tax_lines: Array.isArray(li.tax_lines)
+          ? li.tax_lines.map((t) => ({ title: t.title, rate: t.rate, price: t.price }))
+          : [],
+      }));
+
+      const bLine = items.reduce((s, it) => s + it.line_value, 0);
+      const bTax = items.reduce((s, it) => s + it.tax, 0);
+
+      return {
+        bundle_id: isRealBundle ? bid : null,
+        title, // the name as shown in the cart, e.g. "Solara — Black / … / Heater Gaurd"
+        variant_ids: lines.map((li) => li.variant_id),
+        quantities: lines.map((li) => li.quantity),
+        line_value: bLine,
+        tax_value: bTax,
+        line_value_with_tax: bLine + bTax,
+        items,
+      };
+    });
+
+    // Overall totals across all labeled bundles.
+    const totalLine = bundles.reduce((s, b) => s + b.line_value, 0);
+    const totalTax = bundles.reduce((s, b) => s + b.tax_value, 0);
 
     const record = {
       shop,
@@ -68,24 +129,14 @@ export const action = async ({ request }) => {
       currency: payload.currency ?? payload.presentment_currency ?? null,
       created_at: payload.created_at ?? null,
       taxes_included: payload.taxes_included ?? null,
-      variant_ids: viewerLines.map((li) => li.variant_id),
-      quantities: viewerLines.map((li) => li.quantity),
-      // Pre-tax sum of the labeled lines (unchanged for back-compat).
-      line_value: viewerSubtotal,
-      // Tax on the labeled lines, and their tax-inclusive total.
-      tax_value: viewerTax,
-      line_value_with_tax: viewerSubtotal + viewerTax,
-      items: viewerLines.map((li) => ({
-        variant_id: li.variant_id,
-        product_id: li.product_id,
-        quantity: li.quantity,
-        price: li.price,
-        line_value: Number(li.price ?? 0) * Number(li.quantity ?? 0),
-        tax: lineTax(li),
-        tax_lines: Array.isArray(li.tax_lines)
-          ? li.tax_lines.map((t) => ({ title: t.title, rate: t.rate, price: t.price }))
-          : [],
-      })),
+      // Variant ids grouped per bundle: [[v1, v2], [v3, v4], ...]
+      variant_ids: bundles.map((b) => b.variant_ids),
+      // Totals across all labeled bundles.
+      line_value: totalLine,
+      tax_value: totalTax,
+      line_value_with_tax: totalLine + totalTax,
+      // One entry per bundle, each with its title, variant ids, items, and totals.
+      bundles,
     };
 
     const lambdaUrl = process.env.LAMBDA_URL;
