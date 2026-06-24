@@ -46,24 +46,45 @@ export const action = async ({ request }) => {
       return new Response(null, { status: 200 });
     }
 
+    // Per-line tax = sum of that line's tax_lines[].price. Scoped to the labeled
+    // (viewer-sourced) lines only, so the totals reflect the bundle/viewer products
+    // — not the whole order.
+    const lineTax = (li) =>
+      (Array.isArray(li?.tax_lines) ? li.tax_lines : []).reduce(
+        (sum, t) => sum + Number(t?.price ?? 0),
+        0,
+      );
+
+    const viewerSubtotal = viewerLines.reduce(
+      (sum, li) => sum + Number(li.price ?? 0) * Number(li.quantity ?? 0),
+      0,
+    );
+    const viewerTax = viewerLines.reduce((sum, li) => sum + lineTax(li), 0);
+
     const record = {
       shop,
       order_id: payload.id,
       order_name: payload.name ?? null,
       currency: payload.currency ?? payload.presentment_currency ?? null,
       created_at: payload.created_at ?? null,
+      taxes_included: payload.taxes_included ?? null,
       variant_ids: viewerLines.map((li) => li.variant_id),
       quantities: viewerLines.map((li) => li.quantity),
-      line_value: viewerLines.reduce(
-        (sum, li) => sum + Number(li.price ?? 0) * Number(li.quantity ?? 0),
-        0,
-      ),
+      // Pre-tax sum of the labeled lines (unchanged for back-compat).
+      line_value: viewerSubtotal,
+      // Tax on the labeled lines, and their tax-inclusive total.
+      tax_value: viewerTax,
+      line_value_with_tax: viewerSubtotal + viewerTax,
       items: viewerLines.map((li) => ({
         variant_id: li.variant_id,
         product_id: li.product_id,
         quantity: li.quantity,
         price: li.price,
         line_value: Number(li.price ?? 0) * Number(li.quantity ?? 0),
+        tax: lineTax(li),
+        tax_lines: Array.isArray(li.tax_lines)
+          ? li.tax_lines.map((t) => ({ title: t.title, rate: t.rate, price: t.price }))
+          : [],
       })),
     };
 
