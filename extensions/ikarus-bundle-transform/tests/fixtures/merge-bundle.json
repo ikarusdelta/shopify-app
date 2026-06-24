@@ -39,7 +39,10 @@
               { "cartLineId": "gid://shopify/CartLine/parent", "quantity": 1 },
               { "cartLineId": "gid://shopify/CartLine/child", "quantity": 1 }
             ],
-            "title": "Solara — Sierra Tan / Mixed Species / Harvia Virta / None / Thermo Ash / Towel Holder"
+            "title": "Solara — Sierra Tan / Mixed Species / Harvia Virta / None / Thermo Ash / Towel Holder",
+            "attributes": [
+              { "key": "Configuration", "value": "Sierra Tan / Mixed Species / Harvia Virta / None / Thermo Ash / Towel Holder" }
+            ]
           }
         }
       ]
