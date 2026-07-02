@@ -291,8 +291,8 @@ function ProductConfigPage() {
   }, []);
 
   const hasMapping = Array.isArray(mapRows) && mapRows.some((r) => r?.viewerMenu && r.viewerMenu.trim() !== "");
-  // Parent has no mapping but still needs to sync (sets its base variant price + parent id).
-  const canSync = hasMapping || isParent;
+  // Sync is a child-only step now (a parent applies its price on Save). Needs a mapping.
+  const canSync = hasMapping;
 
   const processMenuOptions = (data) => {
     if (data?.siblingIsParent) setParentSetBySiblingLive(true);
@@ -878,7 +878,8 @@ function ProductConfigPage() {
           </div>
         </s-section>
 
-        {/* STEP 3: SYNC */}
+        {/* STEP 3: SYNC — child only (a parent applies its base price on Save) */}
+        {isChild && (
         <div style={{
           opacity: !canSync ? 0.5 : 1,
           pointerEvents: !canSync ? "none" : "auto",
@@ -937,6 +938,7 @@ function ProductConfigPage() {
             </div>
           </s-section>
         </div>
+        )}
       </s-stack>
     </s-page>
   );

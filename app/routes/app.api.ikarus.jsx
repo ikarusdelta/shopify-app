@@ -297,9 +297,16 @@ export const action = async ({ request }) => {
           let shopifyPayload = null;
 
           if (isParent) {
-            // Parent identity + basePrice. Fetch the default variant for parentVariantId.
+            // Parent identity + basePrice. Parents have no Sync step, so Save also
+            // applies the base price to the parent's (single) variant.
             const variants = await fetchAllVariants(admin, productGid);
-            const parentVariantId = variants[0]?.id.split("/").pop() || null;
+            const parent = variants[0];
+            const parentVariantId = parent?.id.split("/").pop() || null;
+            if (parent?.id) {
+              await bulkUpdateVariantPrices(admin, productGid, [
+                { id: parent.id, price: basePrice.toFixed(2), inventoryItem: { tracked: false } },
+              ]);
+            }
             shopifyPayload = { isParent: true, productId, parentVariantId, basePrice };
           } else if (isChild) {
             // Child bundle map (oid→variant). Build from variants so the viewer works
