@@ -242,7 +242,7 @@ function ProductConfigPage() {
     }
   };
 
-  const [searchParams] = useSearchParams();
+  const [searchParams, setSearchParams] = useSearchParams();
   const searchStr = searchParams.toString();
   const queryString = searchStr ? `?${searchStr}` : "";
 
@@ -526,13 +526,15 @@ function ProductConfigPage() {
 
   return (
     <s-page heading={product?.title || "Product Configuration"}>
-      <s-button onClick={() => {
-        setSearchParams((prev) => {
-          const next = new URLSearchParams(prev);
-          next.delete('productId');
-          return next;
-        });
-      }}>← Back to Products</s-button>
+      <div style={{ marginBottom: "16px" }}>
+        <s-button onClick={() => {
+          setSearchParams((prev) => {
+            const next = new URLSearchParams(prev);
+            next.delete('productId');
+            return next;
+          });
+        }}>← Back to Products</s-button>
+      </div>
 
       {toast && (
         <div style={{
