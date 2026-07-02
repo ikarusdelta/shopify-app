@@ -577,7 +577,7 @@ function ProductConfigPage() {
                   Base Product Price
                 </label>
                 <div style={{ display: "flex", gap: "16px", alignItems: "center" }}>
-                  {/* Parent product — the base product; no option mapping, carries base price. */}
+                  {/* Parent product — the base product; carries base price. Needs no mapping. */}
                   <label style={{
                     display: "flex", alignItems: "center", gap: "6px", fontSize: "12px",
                     cursor: "pointer", color: "#2c6ecb", fontWeight: "600", userSelect: "none",
@@ -635,7 +635,7 @@ function ProductConfigPage() {
 
             <div style={{ display: "flex", flexDirection: "column", gap: "16px", maxWidth: "600px" }}>
 
-              {/* STEP 1: LOAD — child only (a parent product maps nothing) */}
+              {/* STEP 1: LOAD — only shown for child (a parent doesn't need mapping) */}
               {isChild && (
               <div style={{
                 padding: "16px",
@@ -675,7 +675,7 @@ function ProductConfigPage() {
               borderRadius: "8px",
               background: "#fff"
             }}>
-              {/* Mapping is only for CHILD products — a parent has no options to map. */}
+              {/* Mapping is shown only when configuring a child; a parent needs no mapping. */}
               {isChild && (<>
               <h3 style={{ margin: "0 0 12px 0", fontSize: "18px", display: "flex", alignItems: "center", gap: "10px" }}>
                 <span style={{ background: !viewerMenus ? "#8c9196" : "#2c6ecb", color: "#fff", borderRadius: "50%", width: "26px", height: "26px", display: "inline-flex", alignItems: "center", justifyContent: "center", fontSize: "14px" }}>2</span>
