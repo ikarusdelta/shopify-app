@@ -29,6 +29,8 @@ model ProductConfig {
   selectedOptions String @default("[]") // JSON: [{ menu, option }]
   useAsAttributes Boolean @default(false)
   isParent        Boolean @default(false)
+  isChild         Boolean @default(false) // v2 bundle model: this product = one viewer menu
+  menuId          String  @default("")    // v2: the viewer menu id this child maps to
 
   @@unique([shop, productId])
   }

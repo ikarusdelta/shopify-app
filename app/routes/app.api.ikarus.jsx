@@ -3,6 +3,122 @@ import prisma from "../db.server";
 
 const DEFAULT_LAMBDA_URL = "http://localhost:3000/dev";
 
+// ─── v2 bundle-model helpers ────────────────────────────────────────────────
+
+// Fetch ALL variants of a product (paginated; child products are small, parents
+// have a single default variant).
+async function fetchAllVariants(admin, productGid) {
+  const variants = [];
+  let cursor = null;
+  let hasNextPage = true;
+  while (hasNextPage) {
+    const res = await admin.graphql(
+      `query getVariants($id: ID!, $cursor: String) {
+        product(id: $id) {
+          variants(first: 250, after: $cursor) {
+            nodes { id title price selectedOptions { name value } }
+            pageInfo { hasNextPage endCursor }
+          }
+        }
+      }`,
+      { variables: { id: productGid, cursor } },
+    );
+    const data = await res.json();
+    const conn = data.data?.product?.variants;
+    variants.push(...(conn?.nodes || []));
+    hasNextPage = conn?.pageInfo?.hasNextPage || false;
+    cursor = conn?.pageInfo?.endCursor || null;
+  }
+  return variants;
+}
+
+// Set variant prices in chunks of 250 (Shopify's per-call limit). Returns userError string or null.
+async function bulkUpdateVariantPrices(admin, productGid, variantsToUpdate) {
+  for (let i = 0; i < variantsToUpdate.length; i += 250) {
+    const chunk = variantsToUpdate.slice(i, i + 250);
+    const res = await admin.graphql(
+      `mutation productVariantsBulkUpdate($productId: ID!, $variants: [ProductVariantsBulkInput!]!) {
+        productVariantsBulkUpdate(productId: $productId, variants: $variants) {
+          productVariants { id price }
+          userErrors { field message }
+        }
+      }`,
+      { variables: { productId: productGid, variants: chunk } },
+    );
+    const data = await res.json();
+    if (data.errors) return data.errors[0]?.message || "GraphQL error";
+    const errs = data.data?.productVariantsBulkUpdate?.userErrors;
+    if (errs?.length > 0) return errs.map((e) => e.message).join(", ");
+  }
+  return null;
+}
+
+// From a CHILD product's variants + the attrMapping, build the bundle map for the
+// new model. A child = one viewer menu; each variant = one option.
+//   returns { menuId, varientMapping: { "<optionId>": { cvid, name } }, priced: [...] }
+// `priced` sets each variant's price to its OWN option price (child base = 0).
+function buildChildMapping(variants, attrMapping) {
+  let menuId = null;
+  const varientMapping = {};
+  const priced = [];
+
+  const matchForVariant = (variant) => {
+    // Prefer option-name match (product has a real option like "Style").
+    for (const option of variant.selectedOptions || []) {
+      const row = attrMapping.find((r) => r.shopifyOption === option.name);
+      const item = row?.items?.find((i) => i.shopifyValue === option.value);
+      if (item) return { item, row };
+    }
+    // Fallback: the virtual "Product Variants" row matches by variant title.
+    const vRow = attrMapping.find((r) => r.shopifyOption === "Product Variants");
+    const vItem = vRow?.items?.find((i) => i.shopifyValue === variant.title);
+    if (vItem) return { item: vItem, row: vRow };
+    return { item: null, row: null };
+  };
+
+  for (const variant of variants) {
+    const { item, row } = matchForVariant(variant);
+    const oid = item?.viewerOption?.id;
+    if (!item || !oid) continue;
+
+    const cvid = variant.id.split("/").pop();
+    varientMapping[oid] = { cvid, name: item.viewerOption.label || variant.title || "" };
+    if (row && (row.viewerMenuId || row.viewerMenu)) menuId = row.viewerMenuId || row.viewerMenu;
+
+    priced.push({
+      id: variant.id,
+      price: (parseFloat(item.price) || 0).toFixed(2),
+      inventoryItem: { tracked: false },
+    });
+  }
+  return { menuId, varientMapping, priced };
+}
+
+// Per-option display prices for the viewer (written into master.models via the
+// Lambda's menuPrices handler). Keyed by viewer menu id → option slug/id → price.
+function buildMenuPrices(attrMapping) {
+  const menuPrices = {};
+  const mapping = {};
+  (attrMapping || []).forEach((row) => {
+    if (!row.viewerMenu) return;
+    mapping[row.shopifyOption] = row.viewerMenu;
+    const menuKey = row.viewerMenuId || row.viewerMenu;
+    if (!row.items) return;
+    if (!menuPrices[menuKey]) menuPrices[menuKey] = {};
+    row.items.forEach((item) => {
+      if (!item.viewerOption) return;
+      const slug =
+        item.viewerOption.slug ||
+        item.viewerOption.target ||
+        item.viewerOption.id ||
+        item.viewerOption.label;
+      const p = parseFloat(item.price);
+      if (slug && !isNaN(p) && p > 0) menuPrices[menuKey][slug] = p;
+    });
+  });
+  return { menuPrices, mapping };
+}
+
 export const action = async ({ request }) => {
   const url = new URL(request.url);
   console.log("[API] Incoming request params:", Object.fromEntries(url.searchParams));
@@ -74,173 +190,77 @@ export const action = async ({ request }) => {
       }
     }
 
-    // --- Intent: SYNC VARIANT PRICES & GENERATE NEW ARRAYS ---
+    // --- Intent: SYNC PRICES (v2 bundle model) ---
+    // PARENT: set the parent's single variant price = basePrice, store parent identity.
+    // CHILD : set each variant's price = its own option price, store childs[] mapping.
     if (intent === "create_variations") {
       const projectId = formData.get("projectId")?.toString().trim();
       const attrMappingRaw = formData.get("attrMapping")?.toString() || "[]";
       let attrMapping = [];
       try { attrMapping = JSON.parse(attrMappingRaw); } catch (e) {}
       const basePrice = parseFloat(formData.get("basePrice")?.toString() || "0") || 0;
-      const useAsAttributes = formData.get("useAsAttributes") === "true";
       const isParent = formData.get("isParent") === "true";
-      
-      console.log(`[API] CREATE_VARIATIONS -> isParent string: "${formData.get("isParent")}", parsed boolean: ${isParent}`);
+      const isChild = formData.get("isChild") === "true" && !isParent;
 
       try {
-        // Paginate through ALL variants — products can exceed 100 variants
-        // (e.g. 6 colors × 9 interior × 5 heater = 270). Fetching only the first
-        // page would leave later variants un-priced (stuck at their old value).
-        const variants = [];
-        let cursor = null;
-        let hasNextPage = true;
-        while (hasNextPage) {
-          const existingRes = await admin.graphql(
-            `query getVariants($id: ID!, $cursor: String) {
-              product(id: $id) {
-                variants(first: 250, after: $cursor) {
-                  nodes { id title price selectedOptions { name value } }
-                  pageInfo { hasNextPage endCursor }
-                }
-              }
-            }`,
-            { variables: { id: productGid, cursor } }
-          );
-          const existingData = await existingRes.json();
-          const conn = existingData.data?.product?.variants;
-          variants.push(...(conn?.nodes || []));
-          hasNextPage = conn?.pageInfo?.hasNextPage || false;
-          cursor = conn?.pageInfo?.endCursor || null;
-        }
-
+        const variants = await fetchAllVariants(admin, productGid);
         if (variants.length === 0) {
           return Response.json({ variationError: "No variants found for this product." });
         }
 
-        const variantsToUpdate = variants.map((variant) => {
-          let attributeAddonPrice = 0;
-          for (const option of variant.selectedOptions) {
-            const matchedRow = attrMapping.find((row) => row.shopifyOption === option.name);
-            if (matchedRow?.items) {
-              const matchedItem = matchedRow.items.find((item) => item.shopifyValue === option.value);
-              if (matchedItem) attributeAddonPrice += parseFloat(matchedItem.price) || 0;
-            }
-          }
-          const variantRow = attrMapping.find((row) => row.shopifyOption === "Product Variants");
-          if (variantRow?.items) {
-            const matchedItem = variantRow.items.find((item) => item.shopifyValue === variant.title);
-            if (matchedItem) attributeAddonPrice += parseFloat(matchedItem.price) || 0;
-          }
-          // Child products carry only their own option prices — basePrice belongs to the parent only
-          const finalPrice = isParent
-            ? (basePrice + attributeAddonPrice).toFixed(2)
-            : attributeAddonPrice.toFixed(2);
-          return {
-            id: variant.id,
-            price: finalPrice,
-            inventoryItem: { tracked: false }
-          };
-        });
+        if (isParent) {
+          // Parent = single default variant priced at basePrice.
+          const parent = variants[0];
+          const err = await bulkUpdateVariantPrices(admin, productGid, [
+            { id: parent.id, price: basePrice.toFixed(2), inventoryItem: { tracked: false } },
+          ]);
+          if (err) return Response.json({ variationError: `Shopify Error: ${err}` });
 
-        // productVariantsBulkUpdate accepts at most 250 variants per call — chunk it.
-        const updatedVariants = [];
-        for (let i = 0; i < variantsToUpdate.length; i += 250) {
-          const chunk = variantsToUpdate.slice(i, i + 250);
-          const res = await admin.graphql(
-            `mutation productVariantsBulkUpdate($productId: ID!, $variants: [ProductVariantsBulkInput!]!) {
-              productVariantsBulkUpdate(productId: $productId, variants: $variants) {
-                productVariants { id price }
-                userErrors { field message }
-              }
-            }`,
-            { variables: { productId: productGid, variants: chunk } }
-          );
-          const data = await res.json();
-
-          if (data.errors) {
-            console.error("GraphQL Schema Error:", data.errors);
-            return Response.json({ variationError: `Shopify GraphQL Error: ${data.errors[0].message}` });
-          }
-
-          const errors = data.data?.productVariantsBulkUpdate?.userErrors;
-          if (errors?.length > 0) {
-            return Response.json({ variationError: `Shopify Error: ${errors.map(e => e.message).join(", ")}` });
-          }
-
-          updatedVariants.push(...(data.data?.productVariantsBulkUpdate?.productVariants || []));
-        }
-
-        // Build Multi-Product Token Maps
-        const variantMapping = {};
-        const menuSlotsSet = new Set();
-
-        for (const variant of variants) {
-          const keyTokens = [];
-          for (const option of variant.selectedOptions) {
-            const matchedRow = attrMapping.find((row) => row.shopifyOption === option.name);
-            if (matchedRow?.viewerMenu && matchedRow?.items) {
-              const menuId = matchedRow.viewerMenuId || matchedRow.viewerMenu;
-              menuSlotsSet.add(menuId);
-              const matchedItem = matchedRow.items.find((item) => item.shopifyValue === option.value);
-              const optId = matchedItem?.viewerOption?.id;
-              if (matchedItem && menuId && optId) {
-                keyTokens.push(`${menuId}:${optId}`);
-              }
-            }
-          }
-          const variantRow = attrMapping.find((row) => row.shopifyOption === "Product Variants");
-          if (variantRow?.viewerMenu && variantRow?.items) {
-            const menuId = variantRow.viewerMenuId || variantRow.viewerMenu;
-            menuSlotsSet.add(menuId);
-            const matchedItem = variantRow.items.find((item) => item.shopifyValue === variant.title);
-            const optId = matchedItem?.viewerOption?.id;
-            if (matchedItem && menuId && optId) {
-              keyTokens.push(`${menuId}:${optId}`);
-            }
-          }
-          if (keyTokens.length > 0) {
-            variantMapping[keyTokens.sort().join(',')] = variant.id.split('/').pop();
-          }
-        }
-
-        const menuSlots = Array.from(menuSlotsSet);
-
-        // FIXED: Pack mapping configurations securely inside the 'products' array block
-        if (projectId && accessToken && Object.keys(variantMapping).length > 0) {
-          try {
+          const parentVariantId = parent.id.split("/").pop();
+          if (projectId && accessToken) {
             await fetch(`${lambdaUrl}/viewer/${projectId}/options`, {
               method: "PATCH",
               headers: { "Content-Type": "application/json", "x-access-token": accessToken },
               body: JSON.stringify({
-                shopify: {
-                  basePrice: basePrice,
-                  products: [
-                    {
-                      productId: productId,
-                      menuSlots: menuSlots,
-                      varientMapping: variantMapping,
-                      isParent: isParent
-                    }
-                  ]
-                },
-                "use as attributes of product": useAsAttributes
+                shopify: { isParent: true, productId, parentVariantId, basePrice },
               }),
             });
-          } catch (err) {
-            console.error("Variant mapping sync failed:", err);
           }
+          return Response.json({ variationSuccess: true, variationCount: 1, role: "parent" });
         }
 
+        // CHILD (default): price each option variant + build the oid→variant map.
+        const { menuId, varientMapping, priced } = buildChildMapping(variants, attrMapping);
+        if (priced.length === 0) {
+          return Response.json({ variationError: "No variants matched the option mapping. Map the variants to viewer options first." });
+        }
+
+        const err = await bulkUpdateVariantPrices(admin, productGid, priced);
+        if (err) return Response.json({ variationError: `Shopify Error: ${err}` });
+
+        if (projectId && accessToken) {
+          const { menuPrices, mapping } = buildMenuPrices(attrMapping);
+          await fetch(`${lambdaUrl}/viewer/${projectId}/options`, {
+            method: "PATCH",
+            headers: { "Content-Type": "application/json", "x-access-token": accessToken },
+            body: JSON.stringify({
+              menuPrices,
+              mapping,
+              shopify: { isChild: true, child: { productId, menuId, varientMapping } },
+            }),
+          });
+        }
         return Response.json({
           variationSuccess: true,
-          variationCount: variants.length,
-          updatedCount: updatedVariants.length,
+          variationCount: priced.length,
+          role: "child",
         });
       } catch (err) {
         return Response.json({ variationError: `Sync failed: ${err.message}` });
       }
     }
 
-    // --- Intent: SAVE CONFIG ---
+    // --- Intent: SAVE CONFIG (v2 bundle model) ---
     if (intent === "save_config") {
       const projectId = formData.get("projectId")?.toString().trim() || "";
       const attrMappingRaw = formData.get("attrMapping")?.toString() || "[]";
@@ -249,20 +269,22 @@ export const action = async ({ request }) => {
         return Response.json({ saveError: "Failed to parse attribute mapping JSON." });
       }
       const basePrice = parseFloat(formData.get("basePrice")?.toString() || "0") || 0;
-      const useAsAttributes = formData.get("useAsAttributes") === "true";
+      // Parent and Child are mutually exclusive; parent wins if both somehow arrive.
       const isParent = formData.get("isParent") === "true";
-      
-      console.log(`[API] SAVE_CONFIG -> isParent string: "${formData.get("isParent")}", parsed boolean: ${isParent}`);
+      const isChild = formData.get("isChild") === "true" && !isParent;
+
+      // The viewer menu this child maps to (first mapped row).
+      const mappedRow = attrMapping.find((r) => r.viewerMenu);
+      const menuId = mappedRow ? (mappedRow.viewerMenuId || mappedRow.viewerMenu) : "";
 
       try {
         await prisma.productConfig.upsert({
           where: { shop_productId: { shop: session.shop, productId } },
-          update: { projectId, attrMapping: attrMappingRaw, useAsAttributes, isParent },
-          create: { shop: session.shop, productId, projectId, attrMapping: attrMappingRaw, useAsAttributes, isParent },
+          update: { projectId, attrMapping: attrMappingRaw, isParent, isChild, menuId },
+          create: { shop: session.shop, productId, projectId, attrMapping: attrMappingRaw, isParent, isChild, menuId },
         });
 
-        // When this product becomes parent, clear the role from all siblings so only one product
-        // per project holds isParent:true at a time.
+        // Only one parent per project.
         if (isParent && projectId) {
           await prisma.productConfig.updateMany({
             where: { shop: session.shop, projectId, productId: { not: productId } },
@@ -271,39 +293,33 @@ export const action = async ({ request }) => {
         }
 
         if (projectId && accessToken) {
-          const menuPrices = {};
-          const mapping = {};
-          attrMapping.forEach((row) => {
-            if (!row.viewerMenu) return;
-            mapping[row.shopifyOption] = row.viewerMenu;
-            if (!row.items) return;
-            if (!menuPrices[row.viewerMenu]) menuPrices[row.viewerMenu] = {};
-            row.items.forEach((item) => {
-              if (item.viewerOption) {
-                const key = item.viewerOption.id || item.viewerOption.label;
-                if (key) menuPrices[row.viewerMenu][key] = parseFloat(item.price) || 0;
-              }
-            });
-          });
+          const { menuPrices, mapping } = buildMenuPrices(attrMapping);
+          let shopifyPayload = null;
+
+          if (isParent) {
+            // Parent identity + basePrice. Fetch the default variant for parentVariantId.
+            const variants = await fetchAllVariants(admin, productGid);
+            const parentVariantId = variants[0]?.id.split("/").pop() || null;
+            shopifyPayload = { isParent: true, productId, parentVariantId, basePrice };
+          } else if (isChild) {
+            // Child bundle map (oid→variant). Build from variants so the viewer works
+            // after Save even without a separate Sync (Sync additionally sets prices).
+            const variants = await fetchAllVariants(admin, productGid);
+            const built = buildChildMapping(variants, attrMapping);
+            shopifyPayload = {
+              isChild: true,
+              child: { productId, menuId: built.menuId || menuId, varientMapping: built.varientMapping },
+            };
+          }
 
           try {
-            const lambdaShopify = {
-              // Only the parent product owns the project-level basePrice.
-              // Sending it from a child would overwrite the parent's saved value.
-              ...(isParent ? { basePrice } : {}),
-              products: [{
-                productId: productId,
-                isParent: isParent,
-              }]
-            };
             await fetch(`${lambdaUrl}/viewer/${projectId}/options`, {
               method: "PATCH",
               headers: { "Content-Type": "application/json", "x-access-token": accessToken },
               body: JSON.stringify({
                 menuPrices,
                 mapping,
-                shopify: lambdaShopify,
-                "use as attributes of product": useAsAttributes
+                ...(shopifyPayload ? { shopify: shopifyPayload } : {}),
               }),
             });
           } catch (err) {
@@ -322,7 +338,7 @@ export const action = async ({ request }) => {
               metafields: [
                 { ownerId: productGid, namespace: "ikarus_delta", key: "project_id", value: projectId, type: "single_line_text_field" },
                 { ownerId: productGid, namespace: "ikarus_delta", key: "mapping", value: JSON.stringify(attrMapping), type: "json" },
-                { ownerId: productGid, namespace: "ikarus_delta", key: "use_as_attributes", value: useAsAttributes ? "true" : "false", type: "single_line_text_field" },
+                { ownerId: productGid, namespace: "ikarus_delta", key: "role", value: isParent ? "parent" : (isChild ? "child" : ""), type: "single_line_text_field" },
               ],
             },
           }

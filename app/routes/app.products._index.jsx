@@ -99,10 +99,10 @@ export const loader = async ({ request }) => {
     parentSetBySiblingLive = !!siblingParent;
   }
 
+  // v2 model: role is explicit (parent OR child), no auto-defaulting. Most products
+  // in a project are children (one per menu); exactly one is the parent.
   const savedIsParent = config?.isParent === true;
-  // Auto-parent when no sibling holds the role; cleared automatically when another
-  // product in the project is explicitly saved as parent (see save_config cleanup below).
-  const effectiveIsParent = savedIsParent || !parentSetBySiblingLive;
+  const savedIsChild = config?.isChild === true;
 
   return {
     type: "detail",
@@ -112,435 +112,12 @@ export const loader = async ({ request }) => {
     productOptions,
     projectId: config?.projectId || "",
     attrMapping: parsedMapping,
-    // Safely cast database row value to explicit boolean flag
-    useAsAttributes: config?.useAsAttributes === true,
-    isParent: effectiveIsParent,
+    isParent: savedIsParent,
+    isChild: savedIsChild,
     parentSetBySiblingLive,
     accessToken: settings?.accessToken || "",
     lambdaUrl: process.env.LAMBDA_URL || DEFAULT_LAMBDA_URL,
   };
-};
-
-export const action = async ({ request }) => {
-  const isFetcherRequest = request.headers.get("Accept")?.includes("application/json") === true
-    || request.headers.get("X-Remix-Prevent-Reloads") != null
-    || request.headers.get("X-React-Router") != null;
-
-  try {
-    const { admin, session } = await authenticate.admin(request);
-    const url = new URL(request.url);
-    const productId = url.searchParams.get("productId");
-    const productGid = `gid://shopify/Product/${productId}`;
-    const formData = await request.formData();
-    const intent = formData.get("intent")?.toString();
-
-    // Fetch access token for API calls
-    const settings = await prisma.shopSettings.findUnique({
-      where: { shop: session.shop },
-    });
-    const accessToken = settings?.accessToken || "";
-    const lambdaUrl = (process.env.LAMBDA_URL || DEFAULT_LAMBDA_URL).replace(/\/$/, "");
-
-    // --- Intent: LOAD MENUS ---
-    if (intent === "load_menus") {
-      const projectId = formData.get("projectId")?.toString().trim();
-      if (!projectId) return { error: "No Project ID provided" };
-      if (!accessToken) return { error: "No Access Token set in Settings" };
-
-      try {
-        const controller = new AbortController();
-        const timeoutId = setTimeout(() => controller.abort(), 15000);
-
-        const response = await fetch(`${lambdaUrl}/viewer/${projectId}/options`, {
-          headers: { "x-access-token": accessToken },
-          signal: controller.signal,
-        });
-        clearTimeout(timeoutId);
-
-        if (!response.ok) {
-          const err = await response.text();
-          return { error: `API Error: ${response.status} ${err}` };
-        }
-
-        const data = await response.json();
-        return { menuOptions: data.menuOptions || {} };
-      } catch (err) {
-        if (err.name === "AbortError") return { error: "Load menus timed out (15s). Check your Lambda URL and access token." };
-        return { error: `Fetch failed: ${err.message}` };
-      }
-    }
-
-    // --- Intent: SYNC / COMPUTE VARIATION PRICES & GENERATE MAPPINGS ---
-    if (intent === "create_variations") {
-      const projectId = formData.get("projectId")?.toString().trim();
-      const attrMappingRaw = formData.get("attrMapping")?.toString() || "[]";
-      let attrMapping = [];
-      try { attrMapping = JSON.parse(attrMappingRaw); } catch (e) { }
-
-      const basePriceRaw = formData.get("basePrice")?.toString() || "0";
-      const basePrice = parseFloat(basePriceRaw) || 0;
-      const useAsAttributes = formData.get("useAsAttributes") === "true";
-      const isParent = formData.get("isParent") === "true";
-
-      try {
-        console.log(`[Ikarus Sync] Starting bulk price sync for base price: $${basePrice}`);
-
-        const existingRes = await admin.graphql(
-          `query getVariants($id: ID!) {
-          product(id: $id) {
-            variants(first: 100) {
-              nodes {
-                id
-                title
-                price
-                selectedOptions {
-                  name
-                  value
-                }
-              }
-            }
-          }
-        }`,
-          { variables: { id: productGid } }
-        );
-
-        const existingData = await existingRes.json();
-        const variants = existingData.data?.product?.variants?.nodes || [];
-
-        if (variants.length === 0) {
-          return { variationError: "No variants found for this product in Shopify." };
-        }
-
-        const variantsToUpdate = variants.map((variant) => {
-          let attributeAddonPrice = 0;
-
-          for (const option of variant.selectedOptions) {
-            const matchedRow = attrMapping.find((row) => row.shopifyOption === option.name);
-            if (matchedRow && matchedRow.items) {
-              const matchedItem = matchedRow.items.find((item) => item.shopifyValue === option.value);
-              if (matchedItem) {
-                attributeAddonPrice += parseFloat(matchedItem.price) || 0;
-              }
-            }
-          }
-
-          const variantRow = attrMapping.find((row) => row.shopifyOption === "Product Variants");
-          if (variantRow && variantRow.viewerMenu && variantRow.items) {
-            const matchedItem = variantRow.items.find((item) => item.shopifyValue === variant.title);
-            if (matchedItem) {
-              attributeAddonPrice += parseFloat(matchedItem.price) || 0;
-            }
-          }
-
-          // Child products carry only their own option prices — basePrice belongs to the parent only
-          const finalCalculatedPrice = isParent
-            ? (basePrice + attributeAddonPrice).toFixed(2)
-            : attributeAddonPrice.toFixed(2);
-
-          return {
-            id: variant.id,
-            price: finalCalculatedPrice
-          };
-        });
-
-        console.log(`[Ikarus Sync] Sending Bulk Update Payload to Shopify:`, JSON.stringify(variantsToUpdate, null, 2));
-
-        const res = await admin.graphql(
-          `mutation productVariantsBulkUpdate($productId: ID!, $variants: [ProductVariantsBulkInput!]!) {
-          productVariantsBulkUpdate(productId: $productId, variants: $variants) {
-            productVariants { id price }
-            userErrors { field message }
-          }
-        }`,
-          {
-            variables: {
-              productId: productGid,
-              variants: variantsToUpdate
-            }
-          }
-        );
-
-        const data = await res.json();
-        const errors = data.data?.productVariantsBulkUpdate?.userErrors;
-
-        if (errors && errors.length > 0) {
-          console.error("[Ikarus Sync] Shopify Bulk Update Error:", errors);
-          return { variationError: `Shopify Error: ${errors.map((e) => e.message).join(", ")}` };
-        }
-
-        const updatedVariants = data.data?.productVariantsBulkUpdate?.productVariants || [];
-        console.log(`[Ikarus Sync] Successfully updated ${updatedVariants.length} variants.`);
-
-        const nk = (s) => (s || '').trim().toLowerCase();
-
-        const variantMapping = {};
-        const priceMapping = {};
-
-        for (const variant of variants) {
-          const keyTokens = [];
-
-          for (const option of variant.selectedOptions) {
-            const matchedRow = attrMapping.find((row) => row.shopifyOption === option.name);
-            if (matchedRow && matchedRow.viewerMenu && matchedRow.items) {
-              const menuId = matchedRow.viewerMenuId || matchedRow.viewerMenu;
-              const matchedItem = matchedRow.items.find((item) => item.shopifyValue === option.value);
-              const optId = matchedItem?.viewerOption?.id;
-              if (matchedItem && menuId && optId) {
-                keyTokens.push(`${menuId}:${optId}`);
-              }
-            }
-          }
-
-          const variantRow = attrMapping.find((row) => row.shopifyOption === "Product Variants");
-          if (variantRow && variantRow.viewerMenu && variantRow.items) {
-            const menuId = variantRow.viewerMenuId || variantRow.viewerMenu;
-            const matchedItem = variantRow.items.find((item) => item.shopifyValue === variant.title);
-            const optId = matchedItem?.viewerOption?.id;
-            if (matchedItem && menuId && optId) {
-              keyTokens.push(`${menuId}:${optId}`);
-            }
-          }
-
-          if (keyTokens.length > 0) {
-            const mappingKey = keyTokens.sort().join(',');
-            const cleanVariantId = variant.id.split('/').pop();
-            variantMapping[mappingKey] = cleanVariantId;
-          }
-        }
-
-        // priceMapping: variantId → calculated price (exact price Shopify will charge)
-        for (const v of variantsToUpdate) {
-          const cleanId = v.id.split('/').pop();
-          priceMapping[cleanId] = parseFloat(v.price);
-        }
-
-        console.log(`[Ikarus Sync] Constructed Variant Mapping:`, variantMapping);
-        console.log(`[Ikarus Sync] Constructed Price Mapping:`, priceMapping);
-
-        if (projectId && accessToken && Object.keys(variantMapping).length > 0) {
-          try {
-            const menuSlots = Array.from(new Set(attrMapping.map(row => row.viewerMenuId || row.viewerMenu).filter(Boolean)));
-
-            // Build menuPrices so the viewer's per-option price badges stay in sync.
-            // Without this, badges only update when save_config is called separately.
-            const menuPrices = {};
-            const mapping = {};
-            attrMapping.forEach((row) => {
-              if (!row.viewerMenu) return;
-              mapping[row.shopifyOption] = row.viewerMenu;
-              if (!row.items) return;
-              // Use UUID as the key when available; fall back to label for old mappings
-              const menuKey = row.viewerMenuId || row.viewerMenu;
-              if (!menuPrices[menuKey]) menuPrices[menuKey] = {};
-              row.items.forEach((item) => {
-                if (item.viewerOption) {
-                  // slug is the canonical identifier (material slug or model target key)
-                  const slug = item.viewerOption.slug
-                    || item.viewerOption.target
-                    || item.viewerOption.id
-                    || item.viewerOption.label;
-                  const parsedPrice = parseFloat(item.price);
-                  // Only send explicitly non-zero prices — skip 0/unset so existing
-                  // master.json prices (e.g. 1650) are never overwritten with 0.
-                  if (slug && !isNaN(parsedPrice) && parsedPrice > 0) {
-                    menuPrices[menuKey][slug] = parsedPrice;
-                  }
-                }
-              });
-            });
-
-            const response = await fetch(`${lambdaUrl}/viewer/${projectId}/options`, {
-              method: "PATCH",
-              headers: {
-                "Content-Type": "application/json",
-                "x-access-token": accessToken,
-              },
-              body: JSON.stringify({
-                menuPrices,
-                mapping,
-                shopify: {
-                  basePrice: basePrice,
-                  products: [{
-                    productId: productId,
-                    menuSlots: menuSlots,
-                    varientMapping: variantMapping,
-                    priceMapping: priceMapping,
-                    isParent: isParent
-                  }]
-                }
-              }),
-            });
-
-            if (!response.ok) {
-              console.error("Ikarus API Variant Mapping Sync returned error:", await response.text());
-            } else {
-              console.log(`[Ikarus Sync] Successfully pushed varientMapping configuration to master.json`);
-            }
-          } catch (err) {
-            console.error("Ikarus API Variant Mapping Sync network request failed:", err);
-          }
-        }
-
-        return {
-          variationSuccess: true,
-          variationCount: variants.length,
-          updatedCount: updatedVariants.length,
-          createdCount: 0,
-        };
-      } catch (err) {
-        if (err instanceof Response && !isFetcherRequest) throw err;
-        if (err instanceof Response) return { variationError: "Session expired. Please reload the page and try again." };
-        console.error("[Ikarus Sync] Fatal Action Error:", err);
-        return { variationError: `Price computation sync failed: ${err.message}` };
-      }
-    }
-
-    // --- Intent: SAVE CONFIG ---
-    const projectId = formData.get("projectId")?.toString().trim() || "";
-    const attrMappingRaw = formData.get("attrMapping")?.toString() || "[]";
-    let attrMapping = [];
-    try { attrMapping = JSON.parse(attrMappingRaw); } catch (e) {
-      return { saveError: "Failed to parse attribute mapping JSON. Please try again." };
-    }
-
-    const basePriceRaw = formData.get("basePrice")?.toString() || "0";
-    const basePrice = parseFloat(basePriceRaw) || 0;
-    const useAsAttributes = formData.get("useAsAttributes") === "true";
-    const isParent = formData.get("isParent") === "true";
-
-    console.log(`[Ikarus Save] Saving config for product ${productId}, useAsAttributes: ${useAsAttributes}`);
-
-    try {
-      // 1. Save to Local Database
-      await prisma.productConfig.upsert({
-        where: { shop_productId: { shop: session.shop, productId } },
-        update: { projectId, attrMapping: attrMappingRaw, useAsAttributes, isParent },
-        create: { shop: session.shop, productId, projectId, attrMapping: attrMappingRaw, useAsAttributes, isParent },
-      });
-
-      console.log(`[Ikarus Save] DB upsert successful.`);
-
-      // 2. Push to Ikarus Lambda API (Cleaned: useAsAttributes completely excluded from payload as requested)
-      if (projectId && accessToken) {
-        const menuPrices = {};
-        const mapping = {};
-
-        attrMapping.forEach((row) => {
-          if (!row.viewerMenu) return;
-
-          mapping[row.shopifyOption] = row.viewerMenu;
-
-          if (!row.items) return;
-          const menuKey = row.viewerMenuId || row.viewerMenu;
-          if (!menuPrices[menuKey]) menuPrices[menuKey] = {};
-          row.items.forEach((item) => {
-            if (item.viewerOption) {
-              const slug = item.viewerOption.slug
-                || item.viewerOption.target
-                || item.viewerOption.id
-                || item.viewerOption.label;
-              const parsedPrice = parseFloat(item.price);
-              if (slug && !isNaN(parsedPrice) && parsedPrice > 0) {
-                menuPrices[menuKey][slug] = parsedPrice;
-              }
-            }
-          });
-        });
-
-        try {
-          const response = await fetch(`${lambdaUrl}/viewer/${projectId}/options`, {
-            method: "PATCH",
-            headers: {
-              "Content-Type": "application/json",
-              "x-access-token": accessToken,
-            },
-            body: JSON.stringify({
-              menuPrices,
-              mapping,
-              shopify: {
-                basePrice,
-                products: [{
-                  productId: productId,
-                  isParent: isParent,
-                }]
-              }
-            }),
-          });
-
-          if (!response.ok) {
-            const errText = await response.text();
-            console.error("[Ikarus Save] Lambda API Sync returned error:", errText);
-          } else {
-            console.log(`[Ikarus Save] Lambda API Sync successful.`);
-          }
-        } catch (err) {
-          console.error("[Ikarus Save] Lambda API Sync fetch failed:", err);
-        }
-      }
-
-      // 3. Write project ID and Mapping to Shopify Metafields
-      const metafieldRes = await admin.graphql(
-        `mutation setMetafields($metafields: [MetafieldsSetInput!]!) {
-        metafieldsSet(metafields: $metafields) {
-          userErrors { field message }
-        }
-      }`,
-        {
-          variables: {
-            metafields: [
-              {
-                ownerId: productGid,
-                namespace: "ikarus_delta",
-                key: "project_id",
-                value: projectId,
-                type: "single_line_text_field",
-              },
-              {
-                ownerId: productGid,
-                namespace: "ikarus_delta",
-                key: "mapping",
-                value: JSON.stringify(attrMapping),
-                type: "json",
-              },
-              {
-                ownerId: productGid,
-                namespace: "ikarus_delta",
-                key: "use_as_attributes",
-                value: useAsAttributes ? "true" : "false",
-                type: "single_line_text_field",
-              },
-            ],
-          },
-        },
-      );
-
-      const metafieldData = await metafieldRes.json();
-      const metafieldErrors = metafieldData?.data?.metafieldsSet?.userErrors;
-      if (metafieldErrors && metafieldErrors.length > 0) {
-        const errMsg = metafieldErrors.map((e) => `[${e.field}] ${e.message}`).join(", ");
-        console.error("[Ikarus Save] Metafield userErrors:", errMsg);
-        return { saveError: `Shopify Metafield Error: ${errMsg}` };
-      }
-
-      console.log(`[Ikarus Save] Metafields saved successfully.`);
-      return { success: true };
-
-    } catch (err) {
-      if (err instanceof Response && !isFetcherRequest) throw err;
-      if (err instanceof Response) return { saveError: "Session expired. Please reload the page and try again." };
-      console.error("[Ikarus Save] Fatal save error:", err);
-      return { saveError: `Save failed: ${err.message}` };
-    }
-
-  } catch (outerErr) {
-    if (outerErr instanceof Response && !isFetcherRequest) throw outerErr;
-    if (outerErr instanceof Response) {
-      return { error: "Session expired. Please reload the page and try again.", saveError: "Session expired. Please reload the page and try again." };
-    }
-
-    console.error("[Ikarus Action] Unhandled top-level error:", outerErr);
-    return { error: `Unexpected error: ${outerErr.message}`, saveError: `Unexpected error: ${outerErr.message}` };
-  }
 };
 
 function ProductListView({ products }) {
@@ -597,7 +174,7 @@ export default function ProductsPage() {
 }
 
 function ProductConfigPage() {
-  const { product, projectId: savedProjectId, attrMapping: savedMapping, productOptions, useAsAttributes: savedUseAsAttributes, isParent: savedIsParent, parentSetBySiblingLive } = useLoaderData();
+  const { product, projectId: savedProjectId, attrMapping: savedMapping, productOptions, isParent: savedIsParent, isChild: savedIsChild, parentSetBySiblingLive } = useLoaderData();
   const actionData = useActionData();
   const navigation = useNavigation();
   const [isLoadingMenus, setIsLoadingMenus] = useState(false);
@@ -677,18 +254,18 @@ function ProductConfigPage() {
   // Using the first variant's current price here would cause doubled prices on re-sync.
   const [basePrice, setBasePrice] = useState("0");
   
-  const [useAsAttributes, setUseAsAttributes] = useState(savedUseAsAttributes || false);
+  // Role: parent XOR child — manual, mutually exclusive.
   const [isParent, setIsParent] = useState(savedIsParent || false);
+  const [isChild, setIsChild] = useState(savedIsChild || false);
   const [parentSetBySiblingLiveLive, setParentSetBySiblingLive] = useState(parentSetBySiblingLive);
 
-  // FIXED: Sync React UI checkbox values when the database loader resolves upon refresh
-  useEffect(() => {
-    setUseAsAttributes(savedUseAsAttributes);
-  }, [savedUseAsAttributes]);
+  // Sync checkbox state when the loader resolves (e.g. refresh).
+  useEffect(() => { setIsParent(savedIsParent || false); }, [savedIsParent]);
+  useEffect(() => { setIsChild(savedIsChild || false); }, [savedIsChild]);
 
-  useEffect(() => {
-    setIsParent(savedIsParent || false);
-  }, [savedIsParent]);
+  // Ticking one role clears the other; ticking the already-checked one clears it (→ neither).
+  const selectParent = () => setIsParent((v) => { const nv = !v; if (nv) setIsChild(false); return nv; });
+  const selectChild = () => setIsChild((v) => { const nv = !v; if (nv) setIsParent(false); return nv; });
 
   useEffect(() => {
     const warmUpSession = async () => {
@@ -713,18 +290,13 @@ function ProductConfigPage() {
   }, []);
 
   const hasMapping = Array.isArray(mapRows) && mapRows.some((r) => r?.viewerMenu && r.viewerMenu.trim() !== "");
+  // Parent has no mapping but still needs to sync (sets its base variant price + parent id).
+  const canSync = hasMapping || isParent;
 
   const processMenuOptions = (data) => {
-    if (data?.siblingIsParent) {
-      setParentSetBySiblingLive(true);
-      setIsParent(false);
-    }
-    // shopifyBasePrice is project-level — only the parent product uses it.
-    // Child products always have basePrice = 0 (their cost is purely add-ons).
-    const thisProductIsParent = !data?.siblingIsParent;
-    if (data?.shopifyBasePrice != null && thisProductIsParent) {
-      setBasePrice(String(data.shopifyBasePrice));
-    }
+    if (data?.siblingIsParent) setParentSetBySiblingLive(true);
+    // Restore the saved project base price for display (only the parent sends it back).
+    if (data?.shopifyBasePrice != null) setBasePrice(String(data.shopifyBasePrice));
     if (data?.menuOptions) {
       setViewerMenus(data.menuOptions);
       setMapRows((currentRows) => {
@@ -1005,75 +577,44 @@ function ProductConfigPage() {
                   Base Product Price
                 </label>
                 <div style={{ display: "flex", gap: "16px", alignItems: "center" }}>
-                  {/* Parent Product checkbox */}
+                  {/* Parent product — the base product; no option mapping, carries base price. */}
                   <label style={{
-                    display: "flex",
-                    alignItems: "center",
-                    gap: "6px",
-                    fontSize: "12px",
-                    cursor: "pointer",
-                    color: "#2c6ecb",
-                    fontWeight: "600",
-                    userSelect: "none",
+                    display: "flex", alignItems: "center", gap: "6px", fontSize: "12px",
+                    cursor: "pointer", color: "#2c6ecb", fontWeight: "600", userSelect: "none",
                   }}>
-                    <input
-                      type="checkbox"
-                      checked={isParent}
-                      onChange={(e) => {
-                        const checked = e.target.checked;
-                        setIsParent(checked);
-                        if (checked) setUseAsAttributes(false);
-                      }}
-                    />
+                    <input type="checkbox" checked={isParent} onChange={selectParent} />
                     Parent Product
-                    {parentSetBySiblingLive && (
-                      <span style={{ fontSize: "10px", color: "#888", fontWeight: "400" }}>(set by sibling)</span>
-                    )}
                   </label>
-                  {/* Use as Attribute checkbox */}
+                  {/* Child product — one viewer menu; map its variants to options. Base price = 0. */}
                   <label style={{
-                    display: "flex",
-                    alignItems: "center",
-                    gap: "6px",
-                    fontSize: "12px",
-                    cursor: "pointer",
-                    color: "#B83D24",
-                    fontWeight: "600",
-                    userSelect: "none",
+                    display: "flex", alignItems: "center", gap: "6px", fontSize: "12px",
+                    cursor: "pointer", color: "#B83D24", fontWeight: "600", userSelect: "none",
                   }}>
-                    <input
-                      type="checkbox"
-                      checked={useAsAttributes}
-                      onChange={(e) => {
-                        const checked = e.target.checked;
-                        setUseAsAttributes(checked);
-                        if (checked) {
-                          setBasePrice("0");
-                          setIsParent(false);
-                        }
-                      }}
-                    />
-                    Use Product as attribute
+                    <input type="checkbox" checked={isChild} onChange={selectChild} />
+                    Child Product
                   </label>
                 </div>
               </div>
+              {/* Base price — parent only. Disabled for child (child cost = its option variant prices). */}
               <div style={{
                 display: "flex",
                 alignItems: "center",
-                background: useAsAttributes ? "#f1f2f3" : "#fff",
+                background: isChild ? "#f1f2f3" : "#fff",
                 border: "1px solid #c9cccf",
                 borderRadius: "8px",
                 height: "38px",
                 padding: "0 12px",
-                opacity: useAsAttributes ? 0.7 : 1
+                opacity: isChild ? 0.7 : 1
               }}>
-                <span style={{ fontSize: "14px", color: useAsAttributes ? "#999" : "#666", marginRight: "8px", fontWeight: "600" }}>$</span>
+                <span style={{ fontSize: "14px", color: isChild ? "#999" : "#666", marginRight: "8px", fontWeight: "600" }}>$</span>
                 <input
                   type="number"
                   step="0.01"
                   min="0"
-                  value={basePrice}
+                  value={isChild ? "0" : basePrice}
+                  disabled={isChild}
                   onChange={(e) => setBasePrice(e.target.value)}
+                  placeholder={isChild ? "Set on child variants" : "Base price"}
                   style={{
                     width: "100%",
                     border: "none",
@@ -1081,15 +622,21 @@ function ProductConfigPage() {
                     fontSize: "14px",
                     padding: "0",
                     background: "transparent",
-                    color: useAsAttributes ? "#999" : "inherit"
+                    color: isChild ? "#999" : "inherit"
                   }}
                 />
               </div>
+              {isChild && (
+                <span style={{ fontSize: "10px", color: "#888" }}>
+                  Base price is disabled for child products — each option&apos;s price is set on its variant below.
+                </span>
+              )}
             </div>
 
             <div style={{ display: "flex", flexDirection: "column", gap: "16px", maxWidth: "600px" }}>
 
-              {/* STEP 1: LOAD */}
+              {/* STEP 1: LOAD — child only (a parent product maps nothing) */}
+              {isChild && (
               <div style={{
                 padding: "16px",
                 border: "1px solid #e1e3e5",
@@ -1109,15 +656,16 @@ function ProductConfigPage() {
                   {isLoadingMenus ? "Loading..." : "Load Viewer Menus"}
                 </s-button>
               </div>
+              )}
 
             </div>
           </s-stack>
         </s-section>
 
-        {/* STEP 2: ATTRIBUTE MAPPER */}
+        {/* STEP 2: ATTRIBUTE MAPPER (child only) + Save (all roles) */}
         <div style={{
-          opacity: !viewerMenus ? 0.5 : 1,
-          pointerEvents: !viewerMenus ? "none" : "auto",
+          opacity: (!isParent && !viewerMenus) ? 0.5 : 1,
+          pointerEvents: (!isParent && !viewerMenus) ? "none" : "auto",
           transition: "opacity 0.3s ease"
         }}>
           <s-section heading="">
@@ -1127,12 +675,14 @@ function ProductConfigPage() {
               borderRadius: "8px",
               background: "#fff"
             }}>
+              {/* Mapping is only for CHILD products — a parent has no options to map. */}
+              {isChild && (<>
               <h3 style={{ margin: "0 0 12px 0", fontSize: "18px", display: "flex", alignItems: "center", gap: "10px" }}>
                 <span style={{ background: !viewerMenus ? "#8c9196" : "#2c6ecb", color: "#fff", borderRadius: "50%", width: "26px", height: "26px", display: "inline-flex", alignItems: "center", justifyContent: "center", fontSize: "14px" }}>2</span>
                 Attribute Mapper
               </h3>
               <p style={{ margin: "0 0 20px 0", color: "#6d7175", fontSize: "14px" }}>
-                Automatically match loaded menus to attributes, or map them manually. Set add-on prices, or link this product to a specific viewer option.
+                Map this child product&apos;s variants to the viewer menu options and set each option&apos;s price.
               </p>
 
               <div style={{ display: "flex", gap: "16px", alignItems: "center", marginBottom: "24px", padding: "16px", background: "#f9fafb", borderRadius: "8px", border: "1px solid #e1e3e5" }}>
@@ -1289,6 +839,7 @@ function ProductConfigPage() {
               </s-card>
             ))}
           </s-stack>
+              </>)}
 
               <div style={{ marginTop: "24px", paddingTop: "20px", borderTop: "1px solid #e1e3e5" }}>
                 <form onSubmit={(e) => {
@@ -1298,9 +849,8 @@ function ProductConfigPage() {
                     projectId,
                     attrMapping: JSON.stringify(mapRows),
                     basePrice,
-                    // Explicitly format to string type for backend evaluation compatibility
-                    useAsAttributes: useAsAttributes ? "true" : "false",
-                    isParent: isParent ? "true" : "false"
+                    isParent: isParent ? "true" : "false",
+                    isChild: isChild ? "true" : "false"
                   }, setIsSaving, null, "✅ Configuration saved successfully!");
                 }} id="save-config-form">
                   <s-stack direction="inline">
@@ -1329,8 +879,8 @@ function ProductConfigPage() {
 
         {/* STEP 3: SYNC */}
         <div style={{
-          opacity: !hasMapping ? 0.5 : 1,
-          pointerEvents: !hasMapping ? "none" : "auto",
+          opacity: !canSync ? 0.5 : 1,
+          pointerEvents: !canSync ? "none" : "auto",
           transition: "opacity 0.3s ease"
         }}>
           <s-section heading="">
@@ -1341,7 +891,7 @@ function ProductConfigPage() {
               background: "#fff"
             }}>
               <h3 style={{ margin: "0 0 12px 0", fontSize: "18px", display: "flex", alignItems: "center", gap: "10px" }}>
-                <span style={{ background: !hasMapping ? "#8c9196" : "#2c6ecb", color: "#fff", borderRadius: "50%", width: "26px", height: "26px", display: "inline-flex", alignItems: "center", justifyContent: "center", fontSize: "14px" }}>3</span>
+                <span style={{ background: !canSync ? "#8c9196" : "#2c6ecb", color: "#fff", borderRadius: "50%", width: "26px", height: "26px", display: "inline-flex", alignItems: "center", justifyContent: "center", fontSize: "14px" }}>3</span>
                 Sync Variant Prices
               </h3>
               <p style={{ margin: "0 0 16px 0", color: "#6d7175", fontSize: "14px" }}>
@@ -1355,21 +905,21 @@ function ProductConfigPage() {
                   attrMapping: JSON.stringify(mapRows),
                   basePrice,
                   projectId,
-                  useAsAttributes: useAsAttributes ? "true" : "false",
-                  isParent: isParent ? "true" : "false"
-                }, setIsCreatingVars, (data) => setVariationSuccessMsg(`✅ Done! Prices synced for ${data.updatedCount} variants based on your attribute map.`));
+                  isParent: isParent ? "true" : "false",
+                  isChild: isChild ? "true" : "false"
+                }, setIsCreatingVars, (data) => setVariationSuccessMsg(`✅ Done! Synced prices for ${data.variationCount} variant(s) (${data.role || "product"}).`));
               }}>
                 <button
                   type="submit"
-                  disabled={!hasMapping || isCreatingVars}
+                  disabled={!canSync || isCreatingVars}
                   style={{
                     padding: "10px 16px",
                     borderRadius: "8px",
                     border: "1px solid #c9cccf",
-                    background: !hasMapping ? "#f4f6f8" : "#fff",
-                    cursor: (!hasMapping || isCreatingVars) ? "not-allowed" : "pointer",
+                    background: !canSync ? "#f4f6f8" : "#fff",
+                    cursor: (!canSync || isCreatingVars) ? "not-allowed" : "pointer",
                     fontWeight: 600,
-                    color: !hasMapping ? "#8c9196" : "#202223",
+                    color: !canSync ? "#8c9196" : "#202223",
                     transition: "all 0.2s ease"
                   }}
                 >
