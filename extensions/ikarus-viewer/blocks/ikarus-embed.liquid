@@ -22,9 +22,24 @@
     var isBundle = variantIds.length > 1;
     var configToken = event.data.configurationToken || '';
 
+    // A short, UNIQUE-per-build label. The viewer's configurationToken is NOT unique per
+    // build (it's a project/session token), so two builds in one order share the same
+    // _ikarus_config and look mixed up in the admin. This label — derived from the unique
+    // _bundle_id — lets a human (and fulfillment tooling) tell the builds apart.
+    var shortId = bundleId.slice(-6).toUpperCase();
+    var bundleName = (event.data.bundleLabel || event.data.productTitle || 'Build');
+    var bundleLabel = bundleName + ' #' + shortId;
+
     var items = variantIds.map(function (vid, index) {
       var isParent = index === 0;
-      var properties = Object.assign({}, event.data.properties || {});
+
+      // Put the bundle label FIRST so it's the property surfaced in the admin order row.
+      var properties = {};
+      if (isBundle) {
+        properties._bundle = bundleLabel;
+        properties._bundle_line = (index + 1) + ' of ' + variantIds.length;
+      }
+      Object.assign(properties, event.data.properties || {});
 
       // Attribution: tag every viewer-sourced line so the orders/create webhook can
       // match it back to an order. Underscore-prefixed → hidden from cart/checkout UI.
