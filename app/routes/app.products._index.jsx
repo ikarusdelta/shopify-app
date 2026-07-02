@@ -250,9 +250,10 @@ function ProductConfigPage() {
   const [mapRows, setMapRows] = useState(Array.isArray(savedMapping) ? savedMapping : []);
   const [viewerMenus, setViewerMenus] = useState(null);
 
-  // Initialized to "0"; restored from Lambda config (shopifyBasePrice) once load_menus completes.
-  // Using the first variant's current price here would cause doubled prices on re-sync.
-  const [basePrice, setBasePrice] = useState("0");
+  // Parent base price = the product's current price. In v2 the parent variant price
+  // IS the base price (no base+delta), so prefilling from the product is correct and
+  // Sync writes it straight back. A saved shopifyBasePrice (if any) overrides on load.
+  const [basePrice, setBasePrice] = useState(() => product?.variants?.nodes?.[0]?.price ?? "0");
   
   // Role: parent XOR child — manual, mutually exclusive.
   const [isParent, setIsParent] = useState(savedIsParent || false);
@@ -595,41 +596,40 @@ function ProductConfigPage() {
                   </label>
                 </div>
               </div>
-              {/* Base price — parent only. Disabled for child (child cost = its option variant prices). */}
-              <div style={{
-                display: "flex",
-                alignItems: "center",
-                background: isChild ? "#f1f2f3" : "#fff",
-                border: "1px solid #c9cccf",
-                borderRadius: "8px",
-                height: "38px",
-                padding: "0 12px",
-                opacity: isChild ? 0.7 : 1
-              }}>
-                <span style={{ fontSize: "14px", color: isChild ? "#999" : "#666", marginRight: "8px", fontWeight: "600" }}>$</span>
-                <input
-                  type="number"
-                  step="0.01"
-                  min="0"
-                  value={isChild ? "0" : basePrice}
-                  disabled={isChild}
-                  onChange={(e) => setBasePrice(e.target.value)}
-                  placeholder={isChild ? "Set on child variants" : "Base price"}
-                  style={{
-                    width: "100%",
-                    border: "none",
-                    outline: "none",
-                    fontSize: "14px",
-                    padding: "0",
-                    background: "transparent",
-                    color: isChild ? "#999" : "inherit"
-                  }}
-                />
-              </div>
-              {isChild && (
-                <span style={{ fontSize: "10px", color: "#888" }}>
-                  Base price is disabled for child products — each option&apos;s price is set on its variant below.
+              {/* Base price applies to the PARENT only. Hidden entirely for a child. */}
+              {isChild ? (
+                <span style={{ fontSize: "12px", color: "#888" }}>
+                  Base price is 0 for child products — each option&apos;s price is set on its variant in the mapper below.
                 </span>
+              ) : (
+                <div style={{
+                  display: "flex",
+                  alignItems: "center",
+                  background: "#fff",
+                  border: "1px solid #c9cccf",
+                  borderRadius: "8px",
+                  height: "38px",
+                  padding: "0 12px",
+                }}>
+                  <span style={{ fontSize: "14px", color: "#666", marginRight: "8px", fontWeight: "600" }}>$</span>
+                  <input
+                    type="number"
+                    step="0.01"
+                    min="0"
+                    value={basePrice}
+                    onChange={(e) => setBasePrice(e.target.value)}
+                    placeholder="Base price (from the product)"
+                    style={{
+                      width: "100%",
+                      border: "none",
+                      outline: "none",
+                      fontSize: "14px",
+                      padding: "0",
+                      background: "transparent",
+                      color: "inherit",
+                    }}
+                  />
+                </div>
               )}
             </div>
 
@@ -662,10 +662,11 @@ function ProductConfigPage() {
           </s-stack>
         </s-section>
 
-        {/* STEP 2: ATTRIBUTE MAPPER (child only) + Save (all roles) */}
+        {/* STEP 2: ATTRIBUTE MAPPER — child only (a parent needs no mapping) */}
+        {isChild && (
         <div style={{
-          opacity: (!isParent && !viewerMenus) ? 0.5 : 1,
-          pointerEvents: (!isParent && !viewerMenus) ? "none" : "auto",
+          opacity: !viewerMenus ? 0.5 : 1,
+          pointerEvents: !viewerMenus ? "none" : "auto",
           transition: "opacity 0.3s ease"
         }}>
           <s-section heading="">
@@ -675,8 +676,6 @@ function ProductConfigPage() {
               borderRadius: "8px",
               background: "#fff"
             }}>
-              {/* Mapping is shown only when configuring a child; a parent needs no mapping. */}
-              {isChild && (<>
               <h3 style={{ margin: "0 0 12px 0", fontSize: "18px", display: "flex", alignItems: "center", gap: "10px" }}>
                 <span style={{ background: !viewerMenus ? "#8c9196" : "#2c6ecb", color: "#fff", borderRadius: "50%", width: "26px", height: "26px", display: "inline-flex", alignItems: "center", justifyContent: "center", fontSize: "14px" }}>2</span>
                 Attribute Mapper
@@ -839,43 +838,43 @@ function ProductConfigPage() {
               </s-card>
             ))}
           </s-stack>
-              </>)}
-
-              <div style={{ marginTop: "24px", paddingTop: "20px", borderTop: "1px solid #e1e3e5" }}>
-                <form onSubmit={(e) => {
-                  e.preventDefault();
-                  doManualFetch({
-                    intent: "save_config",
-                    projectId,
-                    attrMapping: JSON.stringify(mapRows),
-                    basePrice,
-                    isParent: isParent ? "true" : "false",
-                    isChild: isChild ? "true" : "false"
-                  }, setIsSaving, null, "✅ Configuration saved successfully!");
-                }} id="save-config-form">
-                  <s-stack direction="inline">
-                    <button
-                      type="submit"
-                      disabled={isSaving}
-                      style={{
-                        background: isSaving ? "#a4e8d1" : "#008060",
-                        color: "#fff",
-                        border: "none",
-                        padding: "10px 16px",
-                        borderRadius: "8px",
-                        cursor: isSaving ? "not-allowed" : "pointer",
-                        fontWeight: 600,
-                        transition: "background 0.2s ease",
-                      }}
-                    >
-                      {isSaving ? "Saving..." : "Save All Changes"}
-                    </button>
-                  </s-stack>
-                </form>
-              </div>
             </div>
           </s-section>
         </div>
+        )}
+
+        {/* SAVE — always shown (parent & child). Persists role + base price (+ mapping for child). */}
+        <s-section heading="">
+          <div style={{ padding: "20px", border: "1px solid #e1e3e5", borderRadius: "8px", background: "#fff" }}>
+            <form onSubmit={(e) => {
+              e.preventDefault();
+              doManualFetch({
+                intent: "save_config",
+                projectId,
+                attrMapping: JSON.stringify(mapRows),
+                basePrice,
+                isParent: isParent ? "true" : "false",
+                isChild: isChild ? "true" : "false"
+              }, setIsSaving, null, "✅ Configuration saved successfully!");
+            }} id="save-config-form">
+              <button
+                type="submit"
+                disabled={isSaving}
+                style={{
+                  background: isSaving ? "#a4e8d1" : "#008060",
+                  color: "#fff",
+                  border: "none",
+                  padding: "10px 16px",
+                  borderRadius: "8px",
+                  cursor: isSaving ? "not-allowed" : "pointer",
+                  fontWeight: 600,
+                }}
+              >
+                {isSaving ? "Saving..." : "Save All Changes"}
+              </button>
+            </form>
+          </div>
+        </s-section>
 
         {/* STEP 3: SYNC */}
         <div style={{

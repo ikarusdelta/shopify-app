@@ -82,7 +82,7 @@ function buildChildMapping(variants, attrMapping) {
     if (!item || !oid) continue;
 
     const cvid = variant.id.split("/").pop();
-    varientMapping[oid] = { cvid, name: item.viewerOption.label || variant.title || "" };
+    varientMapping[oid] = cvid; // { "<optionId>": "<variantId>" }
     if (row && (row.viewerMenuId || row.viewerMenu)) menuId = row.viewerMenuId || row.viewerMenu;
 
     priced.push({
@@ -230,7 +230,7 @@ export const action = async ({ request }) => {
         }
 
         // CHILD (default): price each option variant + build the oid→variant map.
-        const { menuId, varientMapping, priced } = buildChildMapping(variants, attrMapping);
+        const { varientMapping, priced } = buildChildMapping(variants, attrMapping);
         if (priced.length === 0) {
           return Response.json({ variationError: "No variants matched the option mapping. Map the variants to viewer options first." });
         }
@@ -246,7 +246,7 @@ export const action = async ({ request }) => {
             body: JSON.stringify({
               menuPrices,
               mapping,
-              shopify: { isChild: true, child: { productId, menuId, varientMapping } },
+              shopify: { isChild: true, child: { productId, varientMapping } },
             }),
           });
         }
@@ -308,7 +308,7 @@ export const action = async ({ request }) => {
             const built = buildChildMapping(variants, attrMapping);
             shopifyPayload = {
               isChild: true,
-              child: { productId, menuId: built.menuId || menuId, varientMapping: built.varientMapping },
+              child: { productId, varientMapping: built.varientMapping },
             };
           }
 
