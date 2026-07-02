@@ -178,9 +178,7 @@ function ProductConfigPage() {
   const actionData = useActionData();
   const navigation = useNavigation();
   const [isLoadingMenus, setIsLoadingMenus] = useState(false);
-  const [isCreatingVars, setIsCreatingVars] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
-  const [variationSuccessMsg, setVariationSuccessMsg] = useState("");
 
   const [toast, setToast] = useState(null);
 
@@ -188,7 +186,6 @@ function ProductConfigPage() {
     setLoading(true);
     if (!isRetry) {
       setToast(null);
-      setVariationSuccessMsg("");
     }
     try {
       const token = await window.shopify.idToken();
@@ -291,8 +288,6 @@ function ProductConfigPage() {
   }, []);
 
   const hasMapping = Array.isArray(mapRows) && mapRows.some((r) => r?.viewerMenu && r.viewerMenu.trim() !== "");
-  // Sync is a child-only step now (a parent applies its price on Save). Needs a mapping.
-  const canSync = hasMapping;
 
   const processMenuOptions = (data) => {
     if (data?.siblingIsParent) setParentSetBySiblingLive(true);
@@ -690,7 +685,7 @@ function ProductConfigPage() {
                 <s-button onClick={autoMap} disabled={hasMapping || !viewerMenus}>
                   Auto Map Attributes
                 </s-button>
-                <span style={{ color: "#d72c0d", fontSize: "13px", fontWeight: "500" }}>* Please review and save your changes before proceeding to Step 3.</span>
+                <span style={{ color: "#d72c0d", fontSize: "13px", fontWeight: "500" }}>* Set each option&apos;s price, then click Save — this applies the prices to the variants.</span>
               </div>
 
               <s-stack direction="block" gap="loose">
@@ -845,100 +840,37 @@ function ProductConfigPage() {
         </div>
         )}
 
-        {/* SAVE — always shown (parent & child). Persists role + base price (+ mapping for child). */}
-        <s-section heading="">
-          <div style={{ padding: "20px", border: "1px solid #e1e3e5", borderRadius: "8px", background: "#fff" }}>
-            <form onSubmit={(e) => {
-              e.preventDefault();
-              doManualFetch({
-                intent: "save_config",
-                projectId,
-                attrMapping: JSON.stringify(mapRows),
-                basePrice,
-                isParent: isParent ? "true" : "false",
-                isChild: isChild ? "true" : "false"
-              }, setIsSaving, null, "✅ Configuration saved successfully!");
-            }} id="save-config-form">
-              <button
-                type="submit"
-                disabled={isSaving}
-                style={{
-                  background: isSaving ? "#a4e8d1" : "#008060",
-                  color: "#fff",
-                  border: "none",
-                  padding: "10px 16px",
-                  borderRadius: "8px",
-                  cursor: isSaving ? "not-allowed" : "pointer",
-                  fontWeight: 600,
-                }}
-              >
-                {isSaving ? "Saving..." : "Save All Changes"}
-              </button>
-            </form>
-          </div>
-        </s-section>
-
-        {/* STEP 3: SYNC — child only (a parent applies its base price on Save) */}
-        {isChild && (
-        <div style={{
-          opacity: !canSync ? 0.5 : 1,
-          pointerEvents: !canSync ? "none" : "auto",
-          transition: "opacity 0.3s ease"
-        }}>
-          <s-section heading="">
-            <div style={{
-              padding: "20px",
-              border: "1px solid #e1e3e5",
-              borderRadius: "8px",
-              background: "#fff"
-            }}>
-              <h3 style={{ margin: "0 0 12px 0", fontSize: "18px", display: "flex", alignItems: "center", gap: "10px" }}>
-                <span style={{ background: !canSync ? "#8c9196" : "#2c6ecb", color: "#fff", borderRadius: "50%", width: "26px", height: "26px", display: "inline-flex", alignItems: "center", justifyContent: "center", fontSize: "14px" }}>3</span>
-                Sync Variant Prices
-              </h3>
-              <p style={{ margin: "0 0 16px 0", color: "#6d7175", fontSize: "14px" }}>
-                Save and sync the new prices based on your attribute map.
-              </p>
-
-              <form onSubmit={(e) => {
-                e.preventDefault();
-                doManualFetch({
-                  intent: "create_variations",
-                  attrMapping: JSON.stringify(mapRows),
-                  basePrice,
-                  projectId,
-                  isParent: isParent ? "true" : "false",
-                  isChild: isChild ? "true" : "false"
-                }, setIsCreatingVars, (data) => setVariationSuccessMsg(`✅ Done! Synced prices for ${data.variationCount} variant(s) (${data.role || "product"}).`));
-              }}>
-                <button
-                  type="submit"
-                  disabled={!canSync || isCreatingVars}
-                  style={{
-                    padding: "10px 16px",
-                    borderRadius: "8px",
-                    border: "1px solid #c9cccf",
-                    background: !canSync ? "#f4f6f8" : "#fff",
-                    cursor: (!canSync || isCreatingVars) ? "not-allowed" : "pointer",
-                    fontWeight: 600,
-                    color: !canSync ? "#8c9196" : "#202223",
-                    transition: "all 0.2s ease"
-                  }}
-                >
-                  {isCreatingVars ? "Syncing..." : "Sync Variant Prices"}
-                </button>
-              </form>
-
-              {/* Success Message */}
-              {variationSuccessMsg && (
-                <div style={{ marginTop: "16px" }}>
-                  <s-banner tone="success" title={variationSuccessMsg} />
-                </div>
-              )}
-            </div>
-          </s-section>
+        {/* Save — plain button (no card). Persists the config AND applies prices to the
+            product's variants (parent → base price; child → each option's price). */}
+        <div style={{ marginTop: "8px" }}>
+          <form onSubmit={(e) => {
+            e.preventDefault();
+            doManualFetch({
+              intent: "save_config",
+              projectId,
+              attrMapping: JSON.stringify(mapRows),
+              basePrice,
+              isParent: isParent ? "true" : "false",
+              isChild: isChild ? "true" : "false"
+            }, setIsSaving, null, "✅ Saved — prices applied to the product.");
+          }} id="save-config-form">
+            <button
+              type="submit"
+              disabled={isSaving}
+              style={{
+                background: isSaving ? "#a4e8d1" : "#008060",
+                color: "#fff",
+                border: "none",
+                padding: "10px 18px",
+                borderRadius: "8px",
+                cursor: isSaving ? "not-allowed" : "pointer",
+                fontWeight: 600,
+              }}
+            >
+              {isSaving ? "Saving..." : "Save All Changes"}
+            </button>
+          </form>
         </div>
-        )}
       </s-stack>
     </s-page>
   );

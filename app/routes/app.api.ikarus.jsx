@@ -190,77 +190,10 @@ export const action = async ({ request }) => {
       }
     }
 
-    // --- Intent: SYNC PRICES (v2 bundle model) ---
-    // PARENT: set the parent's single variant price = basePrice, store parent identity.
-    // CHILD : set each variant's price = its own option price, store childs[] mapping.
-    if (intent === "create_variations") {
-      const projectId = formData.get("projectId")?.toString().trim();
-      const attrMappingRaw = formData.get("attrMapping")?.toString() || "[]";
-      let attrMapping = [];
-      try { attrMapping = JSON.parse(attrMappingRaw); } catch (e) {}
-      const basePrice = parseFloat(formData.get("basePrice")?.toString() || "0") || 0;
-      const isParent = formData.get("isParent") === "true";
-      const isChild = formData.get("isChild") === "true" && !isParent;
-
-      try {
-        const variants = await fetchAllVariants(admin, productGid);
-        if (variants.length === 0) {
-          return Response.json({ variationError: "No variants found for this product." });
-        }
-
-        if (isParent) {
-          // Parent = single default variant priced at basePrice.
-          const parent = variants[0];
-          const err = await bulkUpdateVariantPrices(admin, productGid, [
-            { id: parent.id, price: basePrice.toFixed(2), inventoryItem: { tracked: false } },
-          ]);
-          if (err) return Response.json({ variationError: `Shopify Error: ${err}` });
-
-          const parentVariantId = parent.id.split("/").pop();
-          if (projectId && accessToken) {
-            await fetch(`${lambdaUrl}/viewer/${projectId}/options`, {
-              method: "PATCH",
-              headers: { "Content-Type": "application/json", "x-access-token": accessToken },
-              body: JSON.stringify({
-                shopify: { isParent: true, productId, parentVariantId, basePrice },
-              }),
-            });
-          }
-          return Response.json({ variationSuccess: true, variationCount: 1, role: "parent" });
-        }
-
-        // CHILD (default): price each option variant + build the oid→variant map.
-        const { varientMapping, priced } = buildChildMapping(variants, attrMapping);
-        if (priced.length === 0) {
-          return Response.json({ variationError: "No variants matched the option mapping. Map the variants to viewer options first." });
-        }
-
-        const err = await bulkUpdateVariantPrices(admin, productGid, priced);
-        if (err) return Response.json({ variationError: `Shopify Error: ${err}` });
-
-        if (projectId && accessToken) {
-          const { menuPrices, mapping } = buildMenuPrices(attrMapping);
-          await fetch(`${lambdaUrl}/viewer/${projectId}/options`, {
-            method: "PATCH",
-            headers: { "Content-Type": "application/json", "x-access-token": accessToken },
-            body: JSON.stringify({
-              menuPrices,
-              mapping,
-              shopify: { isChild: true, child: { productId, varientMapping } },
-            }),
-          });
-        }
-        return Response.json({
-          variationSuccess: true,
-          variationCount: priced.length,
-          role: "child",
-        });
-      } catch (err) {
-        return Response.json({ variationError: `Sync failed: ${err.message}` });
-      }
-    }
-
     // --- Intent: SAVE CONFIG (v2 bundle model) ---
+    // Save is the single commit step: it persists the config, applies prices to the
+    // product's variants (parent base price / child option prices), and writes the
+    // parent identity or childs[] mapping to master.json. There is no separate Sync.
     if (intent === "save_config") {
       const projectId = formData.get("projectId")?.toString().trim() || "";
       const attrMappingRaw = formData.get("attrMapping")?.toString() || "[]";
@@ -309,10 +242,13 @@ export const action = async ({ request }) => {
             }
             shopifyPayload = { isParent: true, productId, parentVariantId, basePrice };
           } else if (isChild) {
-            // Child bundle map (oid→variant). Build from variants so the viewer works
-            // after Save even without a separate Sync (Sync additionally sets prices).
+            // Child bundle map (oid→variant). Save also applies each option's price to
+            // its variant, so a child needs no separate Sync step.
             const variants = await fetchAllVariants(admin, productGid);
             const built = buildChildMapping(variants, attrMapping);
+            if (built.priced.length > 0) {
+              await bulkUpdateVariantPrices(admin, productGid, built.priced);
+            }
             shopifyPayload = {
               isChild: true,
               child: { productId, varientMapping: built.varientMapping },
