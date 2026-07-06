@@ -1,0 +1,15 @@
+{
+  "name": "ikarus-order-summary",
+  "private": true,
+  "version": "1.0.0",
+  "license": "UNLICENSED",
+  "type": "module",
+  "scripts": {
+    "shopify": "npm exec -- shopify"
+  },
+  "dependencies": {
+    "react": "^18.2.0",
+    "@shopify/ui-extensions": "2025.7.x",
+    "@shopify/ui-extensions-react": "2025.7.x"
+  }
+}
