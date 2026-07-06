@@ -1,14 +1,23 @@
 {%- liquid
+  assign project_id = product.metafields.ikarus_delta.project_id.value
   assign mapping = product.metafields.ikarus_delta.mapping.value
 
-  # Use the pasted Viewer Base URL exactly as entered — no id is added automatically.
-  # Paste the FULL viewer URL for this product, including its own ?id=... query.
-  assign viewer_src = block.settings.viewer_base_url | strip
+  # Base viewer URL from the block setting (shared across products). Fall back to
+  # production if blank, and drop any query so a hardcoded "?id=" can't leak to
+  # every product — each product's OWN id comes from its metafield below.
+  assign base_url = block.settings.viewer_base_url | strip
+  if base_url == blank
+    assign base_url = 'https://viewer.ikarus3d.com'
+  endif
+  assign base_url = base_url | split: '?' | first
+
+  # Per-product id from the product metafield (set by the IkarusDelta app).
+  assign viewer_src = base_url | append: '?id=' | append: project_id | append: '&projectId=' | append: project_id
 
   assign viewer_width = block.settings.width | default: 100
 -%}
 
-{% if viewer_src != blank %}
+{% if project_id != blank %}
   <div
     class="ikarus-viewer"
     id="ikd-viewer-{{ block.id }}"
@@ -74,7 +83,7 @@
   >
     <strong>IkarusDelta 3D Viewer</strong>
     <p style="margin:8px 0 0;font-size:0.875em;">
-      No Viewer URL set. Paste the full viewer URL (including <code>?id=...</code>) in this block&apos;s settings.
+      No Project ID for this product. Open the IkarusDelta app and set a Project ID — the viewer only shows on configured products.
     </p>
   </div>
 {% endif %}
@@ -87,8 +96,9 @@
     {
       "type": "text",
       "id": "viewer_base_url",
-      "label": "Viewer URL",
-      "info": "Paste the FULL viewer URL for this product, including its ?id=... query. It is used exactly as entered. e.g. https://viewer.ikarus3d.com/product/v8?id=YOUR-PROJECT-ID"
+      "label": "Viewer Base URL",
+      "info": "Base URL only — no ?id=. Each product's Project ID is added automatically from its metafield, and the viewer only shows on products that have one. e.g. https://viewer.ikarus3d.com/product/v8",
+      "default": "https://viewer.ikarus3d.com"
     },
     {
       "type": "range",
