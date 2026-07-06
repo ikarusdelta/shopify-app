@@ -1,27 +1,14 @@
 {%- liquid
-  assign project_id = product.metafields.ikarus_delta.project_id.value
   assign mapping = product.metafields.ikarus_delta.mapping.value
 
-  # Resolve the viewer base URL. Fall back to production if the setting is blank
-  # (e.g. the field was cleared), and strip whitespace from a pasted tunnel link.
-  assign base_url = block.settings.viewer_base_url | strip
-  if base_url == blank
-    assign base_url = 'https://viewer.ikarus3d.com'
-  endif
-
-  # Drop any query string baked into the setting (e.g. a hardcoded "?id=<fixed>"),
-  # otherwise every product would load that same fixed viewer. Each product must
-  # inject its OWN project id below.
-  assign base_url = base_url | split: '?' | first
-
-  # The viewer reads the project id from the `id` query param (viewerStore: params.get('id')).
-  # We also append projectId for backward compatibility with older viewer builds.
-  assign viewer_src = base_url | append: '?id=' | append: project_id | append: '&projectId=' | append: project_id
+  # Use the pasted Viewer Base URL exactly as entered — no id is added automatically.
+  # Paste the FULL viewer URL for this product, including its own ?id=... query.
+  assign viewer_src = block.settings.viewer_base_url | strip
 
   assign viewer_width = block.settings.width | default: 100
 -%}
 
-{% if project_id != blank %}
+{% if viewer_src != blank %}
   <div
     class="ikarus-viewer"
     id="ikd-viewer-{{ block.id }}"
@@ -87,7 +74,7 @@
   >
     <strong>IkarusDelta 3D Viewer</strong>
     <p style="margin:8px 0 0;font-size:0.875em;">
-      No Project ID configured. Open the IkarusDelta app and set a Project ID for this product.
+      No Viewer URL set. Paste the full viewer URL (including <code>?id=...</code>) in this block&apos;s settings.
     </p>
   </div>
 {% endif %}
@@ -100,9 +87,9 @@
     {
       "type": "text",
       "id": "viewer_base_url",
-      "label": "Viewer Base URL",
-      "info": "Base URL only — no trailing slash and NO ?id=. The product's Project ID is added automatically. e.g. https://viewer.ikarus3d.com",
-      "default": "https://viewer.ikarus3d.com"
+      "label": "Viewer URL",
+      "info": "Paste the FULL viewer URL for this product, including its ?id=... query. It is used exactly as entered. e.g. https://viewer.ikarus3d.com/product/v8?id=YOUR-PROJECT-ID",
+      "default": ""
     },
     {
       "type": "range",
