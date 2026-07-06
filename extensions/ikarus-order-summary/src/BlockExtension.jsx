@@ -5,7 +5,6 @@ import {
   AdminBlock,
   BlockStack,
   InlineStack,
-  Box,
   Divider,
   Badge,
   Checkbox,
@@ -119,12 +118,13 @@ function OrderSummary() {
   return (
     <AdminBlock title="IkarusDelta Order Summary" collapsedSummary={collapsedSummary}>
       <BlockStack gap="base">
-        <Checkbox checked={showAll} onChange={(value) => setShowAll(value)}>
-          Show all products (off = only configured bundles)
-        </Checkbox>
+        <Checkbox
+          checked={showAll}
+          onChange={(value) => setShowAll(value)}
+          label="Show all products (off = only configured bundles)"
+        />
 
-        <Box maxBlockSize={420}>
-          <BlockStack gap="base">
+        <BlockStack gap="base">
             {nothingToShow && (
               <Text>{hasBundles ? '' : 'No configured (3D viewer) products in this order.'}</Text>
             )}
@@ -176,8 +176,7 @@ function OrderSummary() {
                 ))}
               </BlockStack>
             )}
-          </BlockStack>
-        </Box>
+        </BlockStack>
       </BlockStack>
     </AdminBlock>
   );
