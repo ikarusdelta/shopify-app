@@ -76,7 +76,11 @@ export function cartTransformRun(input: CartTransformRunInput): CartTransformRun
     operations.push({
       linesMerge: {
         parentVariantId,
-        cartLines: lines.map((l) => ({ cartLineId: l.id, quantity: l.quantity })),
+        // Recipe = 1 of each component per bundle. Shopify then forms as many bundles
+        // as the component quantities allow, so the merged line's quantity tracks the
+        // cart quantity correctly. (Using l.quantity here scales the recipe with the
+        // quantity, pinning the bundle at qty 1 while the price multiplies.)
+        cartLines: lines.map((l) => ({ cartLineId: l.id, quantity: 1 })),
         title: combinedTitle || undefined,
         attributes,
       },
