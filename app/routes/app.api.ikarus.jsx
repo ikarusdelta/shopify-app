@@ -202,6 +202,7 @@ export const action = async ({ request }) => {
         return Response.json({ saveError: "Failed to parse attribute mapping JSON." });
       }
       const basePrice = parseFloat(formData.get("basePrice")?.toString() || "0") || 0;
+      const productName = formData.get("productName")?.toString() || "";
       // Parent and Child are mutually exclusive; parent wins if both somehow arrive.
       const isParent = formData.get("isParent") === "true";
       const isChild = formData.get("isChild") === "true" && !isParent;
@@ -240,7 +241,7 @@ export const action = async ({ request }) => {
                 { id: parent.id, price: basePrice.toFixed(2), inventoryItem: { tracked: false } },
               ]);
             }
-            shopifyPayload = { isParent: true, productId, parentVariantId, basePrice };
+            shopifyPayload = { isParent: true, productId, parentVariantId, basePrice, productName };
           } else if (isChild) {
             // Child bundle map (oid→variant). Save also applies each option's price to
             // its variant, so a child needs no separate Sync step.
@@ -251,7 +252,7 @@ export const action = async ({ request }) => {
             }
             shopifyPayload = {
               isChild: true,
-              child: { productId, varientMapping: built.varientMapping },
+              child: { productId, varientMapping: built.varientMapping, name: productName },
             };
           }
 

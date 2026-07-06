@@ -850,6 +850,7 @@ function ProductConfigPage() {
               projectId,
               attrMapping: JSON.stringify(mapRows),
               basePrice,
+              productName: product?.title || "",
               isParent: isParent ? "true" : "false",
               isChild: isChild ? "true" : "false"
             }, setIsSaving, null, "✅ Saved — prices applied to the product.");
