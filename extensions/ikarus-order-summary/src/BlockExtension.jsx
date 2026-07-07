@@ -134,6 +134,11 @@ function OrderSummary() {
               const rows = [b.parent, ...b.children].filter(Boolean);
               const currency = (rows.find((r) => r.currency) || {}).currency || '';
               const total = rows.reduce((sum, r) => sum + (r.amount || 0), 0);
+              // Every component scales together (linesMerge recipe = 1 each), so the number
+              // of bundles ordered = the parent's (or any component's) line quantity.
+              const bundleQty = (b.parent?.qty) || (b.children[0]?.qty) || 1;
+              // Show the breakdown per single build; the ×qty lives on the header only.
+              const perUnit = (r) => (r && r.qty > 0 ? r.amount / r.qty : (r ? r.amount : 0));
 
               return (
                 <BlockStack key={b.id} gap="base">
@@ -141,22 +146,28 @@ function OrderSummary() {
                   <InlineStack gap="base" inlineAlignment="space-between" blockAlignment="center">
                     <InlineStack gap="base" blockAlignment="center">
                       <Badge tone="info">{b.label}</Badge>
-                      <Text fontWeight="bold">{b.parent ? b.parent.title : 'Bundle'}</Text>
+                      <Text fontWeight="bold">
+                        {b.parent ? b.parent.title : 'Bundle'}{bundleQty > 1 ? ` ×${bundleQty}` : ''}
+                      </Text>
                     </InlineStack>
                     <Text fontWeight="bold">{money(total, currency)}</Text>
                   </InlineStack>
 
+                  {bundleQty > 1 && (
+                    <Text>{`${money(total / bundleQty, currency)} per build × ${bundleQty}`}</Text>
+                  )}
+
                   {b.parent && (
                     <InlineStack gap="base" inlineAlignment="space-between">
                       <Text>{b.parent.title} — base</Text>
-                      <Text>{money(b.parent.amount, b.parent.currency)}</Text>
+                      <Text>{money(perUnit(b.parent), b.parent.currency)}</Text>
                     </InlineStack>
                   )}
 
                   {b.children.map((c, j) => (
                     <InlineStack key={j} gap="base" inlineAlignment="space-between">
-                      <Text>{' ┗ '}{c.title}{c.option ? ` — ${c.option}` : ''}{c.qty > 1 ? ` ×${c.qty}` : ''}</Text>
-                      <Text>{money(c.amount, c.currency)}</Text>
+                      <Text>{' ┗ '}{c.title}{c.option ? ` — ${c.option}` : ''}</Text>
+                      <Text>{money(perUnit(c), c.currency)}</Text>
                     </InlineStack>
                   ))}
                 </BlockStack>
