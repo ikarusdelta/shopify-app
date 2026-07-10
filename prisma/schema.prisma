@@ -31,6 +31,8 @@ model ProductConfig {
   isParent        Boolean @default(false)
   isChild         Boolean @default(false) // v2 bundle model: this product = one viewer menu
   menuId          String  @default("")    // v2: the viewer menu id this child maps to
+  orgId           String  @default("")    // viewer org id (master.json orgDetails.orgId)
+  dirId           String  @default("")    // viewer directory id (orgDetails.directoryId)
 
   @@unique([shop, productId])
   }

@@ -1,4 +1,5 @@
 import { authenticate } from "../shopify.server";
+import prisma from "../db.server";
 
 const VIEWER_SOURCE = "3d_viewer";
 
@@ -77,7 +78,25 @@ export const action = async ({ request }) => {
       groups.get(bid).push(li);
     }
 
-    const bundles = order.map((bid) => {
+    // Look up a product's viewer config (projectId + org/dir ids) by its Shopify product id.
+    const configCache = new Map();
+    const getConfig = async (productId) => {
+      if (productId == null) return null;
+      const key = String(productId);
+      if (configCache.has(key)) return configCache.get(key);
+      let cfg = null;
+      try {
+        cfg = await prisma.productConfig.findUnique({
+          where: { shop_productId: { shop, productId: key } },
+        });
+      } catch (e) {
+        console.warn("[orders/create] config lookup failed for", key, e?.message);
+      }
+      configCache.set(key, cfg);
+      return cfg;
+    };
+
+    const bundles = await Promise.all(order.map(async (bid) => {
       const lines = groups.get(bid);
       const isRealBundle = !String(bid).startsWith("single_");
       // The parent line carries the product name; child lines add their options.
@@ -106,9 +125,19 @@ export const action = async ({ request }) => {
       const bLine = items.reduce((s, it) => s + it.line_value, 0);
       const bTax = items.reduce((s, it) => s + it.tax, 0);
 
+      // Viewer identity for this bundle, from the parent product's saved config.
+      const cfg = await getConfig(parent?.product_id);
+      const productID = cfg?.projectId || "";   // parent's viewer project id
+      const orgId = cfg?.orgId || "";
+      const dirId = cfg?.dirId || "";
+
       return {
         bundle_id: isRealBundle ? bid : null,
         title, // the name as shown in the cart, e.g. "Solara — Black / … / Heater Gaurd"
+        productID,                         // parent viewer/project id
+        orgId,
+        dirId,
+        parent_product_id: parent?.product_id ?? null,  // Shopify parent product id
         variant_ids: lines.map((li) => li.variant_id),
         quantities: lines.map((li) => li.quantity),
         line_value: bLine,
@@ -116,11 +145,14 @@ export const action = async ({ request }) => {
         line_value_with_tax: bLine + bTax,
         items,
       };
-    });
+    }));
 
     // Overall totals across all labeled bundles.
     const totalLine = bundles.reduce((s, b) => s + b.line_value, 0);
     const totalTax = bundles.reduce((s, b) => s + b.tax_value, 0);
+
+    // Org/dir are project-level — take them from the first bundle that has them.
+    const withOrg = bundles.find((b) => b.orgId || b.dirId) || {};
 
     const record = {
       shop,
@@ -129,6 +161,10 @@ export const action = async ({ request }) => {
       currency: payload.currency ?? payload.presentment_currency ?? null,
       created_at: payload.created_at ?? null,
       taxes_included: payload.taxes_included ?? null,
+      orgId: withOrg.orgId || "",
+      dirId: withOrg.dirId || "",
+      // Parent viewer/project ids, one per bundle.
+      productIDs: bundles.map((b) => b.productID).filter(Boolean),
       // Variant ids grouped per bundle: [[v1, v2], [v3, v4], ...]
       variant_ids: bundles.map((b) => b.variant_ids),
       // Totals across all labeled bundles.

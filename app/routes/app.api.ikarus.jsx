@@ -257,7 +257,7 @@ export const action = async ({ request }) => {
           }
 
           try {
-            await fetch(`${lambdaUrl}/viewer/${projectId}/options`, {
+            const lambdaRes = await fetch(`${lambdaUrl}/viewer/${projectId}/options`, {
               method: "PATCH",
               headers: { "Content-Type": "application/json", "x-access-token": accessToken },
               body: JSON.stringify({
@@ -266,6 +266,20 @@ export const action = async ({ request }) => {
                 ...(shopifyPayload ? { shopify: shopifyPayload } : {}),
               }),
             });
+            // Persist the viewer org/dir ids so the order webhook can include them.
+            try {
+              const lj = await lambdaRes.json();
+              const orgId = lj?.orgDetails?.orgId || "";
+              const dirId = lj?.orgDetails?.dirId || "";
+              if (orgId || dirId) {
+                await prisma.productConfig.update({
+                  where: { shop_productId: { shop: session.shop, productId } },
+                  data: { orgId, dirId },
+                });
+              }
+            } catch (e) {
+              console.warn("Could not persist orgId/dirId:", e?.message);
+            }
           } catch (err) {
             console.error("Lambda sync failed:", err);
           }
