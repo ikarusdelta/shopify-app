@@ -63,6 +63,17 @@ export const action = async ({ request }) => {
         0,
       );
 
+    // Non-configurator ("normal") products in the same order — captured minimally so
+    // the configurator's share of this order's revenue can be computed downstream.
+    const normal = lineItems
+      .filter((li) => !hasViewerProp(li?.properties))
+      .map((li) => ({
+        parent_product_id: li.product_id ?? null,
+        quantity: li.quantity,
+        line_value: num(li.price) * num(li.quantity),
+        tax_value: lineTax(li),
+      }));
+
     // --- Group viewer lines into bundles ---------------------------------------
     // Lines added together as a bundle share a `_bundle_id` property (set by the
     // viewer embed). Lines with no bundle id are standalone (their own group).
@@ -147,12 +158,9 @@ export const action = async ({ request }) => {
       };
     }));
 
-    // Overall totals across all labeled bundles.
+    // Overall totals across all labeled (configurator) bundles.
     const totalLine = bundles.reduce((s, b) => s + b.line_value, 0);
     const totalTax = bundles.reduce((s, b) => s + b.tax_value, 0);
-
-    // Org/dir are project-level — take them from the first bundle that has them.
-    const withOrg = bundles.find((b) => b.orgId || b.dirId) || {};
 
     const record = {
       shop,
@@ -161,18 +169,16 @@ export const action = async ({ request }) => {
       currency: payload.currency ?? payload.presentment_currency ?? null,
       created_at: payload.created_at ?? null,
       taxes_included: payload.taxes_included ?? null,
-      orgId: withOrg.orgId || "",
-      dirId: withOrg.dirId || "",
-      // Parent viewer/project ids, one per bundle.
-      productIDs: bundles.map((b) => b.productID).filter(Boolean),
-      // Variant ids grouped per bundle: [[v1, v2], [v3, v4], ...]
-      variant_ids: bundles.map((b) => b.variant_ids),
-      // Totals across all labeled bundles.
+      // Totals across the configurator bundles (org/dir/productID now live per bundle).
       line_value: totalLine,
       tax_value: totalTax,
       line_value_with_tax: totalLine + totalTax,
-      // One entry per bundle, each with its title, variant ids, items, and totals.
-      bundles,
+      products: {
+        // Configurator (3D viewer) bundles — full detail (parent + children, org/dir/ids).
+        configurator: bundles,
+        // Everything else in the order — minimal, for revenue-share.
+        normal,
+      },
     };
 
     const lambdaUrl = process.env.LAMBDA_URL;
