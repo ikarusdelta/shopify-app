@@ -40,10 +40,56 @@ export const action = async ({ request }) => {
 
     const viewerLines = lineItems.filter((li) => hasViewerProp(li?.properties));
 
+    // Normal-only order (no viewer-sourced lines): forward a minimal record to the
+    // Lambda so it can credit the store revenue table. Don't return early.
     if (viewerLines.length === 0) {
       console.log(
-        `[orders/create] ${shop} order ${payload?.id}: no viewer-sourced lines, skipping.`,
+        `[orders/create] ${shop} order ${payload?.id}: no viewer-sourced lines — forwarding as normal order.`,
       );
+
+      const normalLines = lineItems.map((li) => ({
+        parent_product_id: li.product_id ?? null,
+        quantity: li.quantity,
+        line_value: num(li.price) * num(li.quantity),
+        tax_value: (Array.isArray(li?.tax_lines) ? li.tax_lines : []).reduce(
+          (sum, t) => sum + num(t?.price), 0,
+        ),
+      }));
+
+      const normalRecord = {
+        shop,
+        order_id: payload.id,
+        order_name: payload.name ?? null,
+        currency: payload.currency ?? payload.presentment_currency ?? null,
+        total_price: payload.total_price ?? null,
+        created_at: payload.created_at ?? null,
+        products: { configurator: [], normal: normalLines },
+      };
+
+      const lambdaUrl = process.env.LAMBDA_URL;
+      if (!lambdaUrl) {
+        console.error("[orders/create] LAMBDA_URL is not set; cannot forward normal order.");
+        return new Response("LAMBDA_URL not configured", { status: 500 });
+      }
+
+      try {
+        const endpoint = `${lambdaUrl.replace(/\/$/, "")}/attribution/orders`;
+        const res = await fetch(endpoint, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(normalRecord),
+        });
+        if (!res.ok) {
+          const body = await res.text().catch(() => "");
+          console.error(`[orders/create] Lambda returned ${res.status} for normal order ${payload?.id}: ${body}`);
+          return new Response("Lambda write failed", { status: 500 });
+        }
+        console.log(`[orders/create] ${shop} order ${payload?.id}: normal order forwarded to Lambda.`);
+      } catch (err) {
+        console.error("[orders/create] Lambda request failed for normal order:", err);
+        return new Response("Lambda unreachable", { status: 500 });
+      }
+
       return new Response(null, { status: 200 });
     }
 
