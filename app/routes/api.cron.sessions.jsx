@@ -31,7 +31,7 @@ export const loader = async ({ request }) => {
         `#graphql
         query { shopifyqlQuery(query: "FROM sessions SHOW total_sessions SINCE -1d UNTIL today") {
           tableData { rows columns { name dataType } }
-          parseErrors { code message }
+          parseErrors
         } }`,
       );
       const json = await res.json();
