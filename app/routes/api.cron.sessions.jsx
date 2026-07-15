@@ -30,10 +30,13 @@ export const loader = async ({ request }) => {
       const res = await admin.graphql(
         `#graphql
         query { shopifyqlQuery(query: "FROM sessions SHOW total_sessions SINCE -1d UNTIL today") {
-          ... on TableResponse { tableData { rowData } }
+          __typename
+          tableData { rowData columns { name dataType } }
+          parseErrors { code message }
         } }`,
       );
       const json = await res.json();
+      if (json.errors) throw new Error(JSON.stringify(json.errors));
       const row = json?.data?.shopifyqlQuery?.tableData?.rowData?.[0];
       const views = Number(row?.[0] ?? 0);
 
@@ -42,7 +45,7 @@ export const loader = async ({ request }) => {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ shop, date, views }),
       });
-      results.push({ shop, views });
+      results.push({ shop, views, debug: json?.data?.shopifyqlQuery }); // TODO: drop debug once confirmed
     } catch (err) {
       console.error(`[cron/sessions] ${shop} failed:`, err?.message || err);
       results.push({ shop, error: err?.message || String(err) });
