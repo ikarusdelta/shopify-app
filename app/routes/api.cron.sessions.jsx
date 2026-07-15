@@ -3,7 +3,8 @@ import prisma from "../db.server";
 
 /**
  * Vercel Cron (see vercel.json) — once a day, pulls yesterday's Online Store
- * session count per shop via ShopifyQL and forwards it to the Lambda, which
+ * views per shop via ShopifyQL (total_sessions — the closest metric Shopify's
+ * Admin API exposes to page views) and forwards it to the Lambda, which
  * stores it in the same DynamoDB item as total revenue (STORE_REVENUE_TABLE).
  *
  * Needs read_analytics scope + an offline session per shop (stored by
@@ -34,14 +35,14 @@ export const loader = async ({ request }) => {
       );
       const json = await res.json();
       const row = json?.data?.shopifyqlQuery?.tableData?.rowData?.[0];
-      const sessions = Number(row?.[0] ?? 0);
+      const views = Number(row?.[0] ?? 0);
 
-      await fetch(`${lambdaUrl.replace(/\/$/, "")}/analytics/sessions`, {
+      await fetch(`${lambdaUrl.replace(/\/$/, "")}/analytics/views`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ shop, date, sessions }),
+        body: JSON.stringify({ shop, date, views }),
       });
-      results.push({ shop, sessions });
+      results.push({ shop, views });
     } catch (err) {
       console.error(`[cron/sessions] ${shop} failed:`, err?.message || err);
       results.push({ shop, error: err?.message || String(err) });
