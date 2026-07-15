@@ -1,4 +1,7 @@
 {
   "version": 2,
-  "buildCommand": "npm run build"
+  "buildCommand": "npm run build",
+  "crons": [
+    { "path": "/api/cron/sessions", "schedule": "0 2 * * *" }
+  ]
 }

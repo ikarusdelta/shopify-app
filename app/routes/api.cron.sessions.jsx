@@ -1,0 +1,52 @@
+import { unauthenticated } from "../shopify.server";
+import prisma from "../db.server";
+
+/**
+ * Vercel Cron (see vercel.json) — once a day, pulls yesterday's Online Store
+ * session count per shop via ShopifyQL and forwards it to the Lambda, which
+ * stores it in the same DynamoDB item as total revenue (STORE_REVENUE_TABLE).
+ *
+ * Needs read_analytics scope + an offline session per shop (stored by
+ * PrismaSessionStorage on install — see shopify.server.js).
+ */
+export const loader = async ({ request }) => {
+  const auth = request.headers.get("authorization");
+  if (process.env.CRON_SECRET && auth !== `Bearer ${process.env.CRON_SECRET}`) {
+    return new Response("Unauthorized", { status: 401 });
+  }
+
+  const lambdaUrl = process.env.LAMBDA_URL;
+  if (!lambdaUrl) return new Response("LAMBDA_URL not configured", { status: 500 });
+
+  const date = new Date(Date.now() - 86400000).toISOString().slice(0, 10); // yesterday, UTC
+
+  const shops = await prisma.session.findMany({ where: { isOnline: false } });
+  const results = [];
+
+  for (const { shop } of shops) {
+    try {
+      const { admin } = await unauthenticated.admin(shop);
+      const res = await admin.graphql(
+        `#graphql
+        query { shopifyqlQuery(query: "FROM sessions SHOW total_sessions SINCE -1d UNTIL today") {
+          ... on TableResponse { tableData { rowData } }
+        } }`,
+      );
+      const json = await res.json();
+      const row = json?.data?.shopifyqlQuery?.tableData?.rowData?.[0];
+      const sessions = Number(row?.[0] ?? 0);
+
+      await fetch(`${lambdaUrl.replace(/\/$/, "")}/analytics/sessions`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ shop, date, sessions }),
+      });
+      results.push({ shop, sessions });
+    } catch (err) {
+      console.error(`[cron/sessions] ${shop} failed:`, err?.message || err);
+      results.push({ shop, error: err?.message || String(err) });
+    }
+  }
+
+  return Response.json({ date, results });
+};
