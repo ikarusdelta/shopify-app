@@ -27,25 +27,15 @@ export const loader = async ({ request }) => {
   for (const { shop } of shops) {
     try {
       const { admin } = await unauthenticated.admin(shop);
-      const res = await admin.graphql(
-        `#graphql
-        query { shopifyqlQuery(query: "FROM sessions SHOW total_sessions SINCE -1d UNTIL today") {
-          __typename
-          tableData { rowData columns { name dataType } }
-          parseErrors { code message }
-        } }`,
-      );
-      const json = await res.json();
-      if (json.errors) throw new Error(JSON.stringify(json.errors));
-      const row = json?.data?.shopifyqlQuery?.tableData?.rowData?.[0];
-      const views = Number(row?.[0] ?? 0);
 
-      await fetch(`${lambdaUrl.replace(/\/$/, "")}/analytics/views`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ shop, date, views }),
-      });
-      results.push({ shop, views, debug: json?.data?.shopifyqlQuery }); // TODO: drop debug once confirmed
+      // TEMP: introspect the real field names on ShopifyqlTableData instead of guessing.
+      const introRes = await admin.graphql(
+        `#graphql
+        query { __type(name: "ShopifyqlTableData") { fields { name type { name kind ofType { name kind } } } } }`,
+      );
+      const introJson = await introRes.json();
+      results.push({ shop, introspection: introJson?.data?.__type });
+      continue; // TODO: remove this probe + continue once field names are confirmed
     } catch (err) {
       console.error(`[cron/sessions] ${shop} failed:`, err?.message || err);
       results.push({ shop, error: err?.message || String(err) });
